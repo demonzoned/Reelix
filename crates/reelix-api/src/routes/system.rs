@@ -58,6 +58,38 @@ pub async fn health(State(state): State<AppState>, MaybeUser(user): MaybeUser) -
     (code, ApiJson(HealthReport { status, checks })).into_response()
 }
 
+/// How long a data directory write test is trusted. The Docker health check calls `/system/health` every
+/// 30 to 60 seconds; writing a file each time keeps disks from sleeping and wears SD cards.
+const WRITE_TEST_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+type WriteTest = Result<std::io::Result<()>, tokio::task::JoinError>;
+
+/// Writes and removes a probe file in `dir`, at most once per [`WRITE_TEST_TTL`]; a failure is never
+/// cached, so a fixed disk shows as healthy on the next call.
+async fn data_dir_writable(dir: std::path::PathBuf) -> WriteTest {
+    static LAST_OK: std::sync::Mutex<Option<(std::path::PathBuf, std::time::Instant)>> =
+        std::sync::Mutex::new(None);
+    let fresh = LAST_OK
+        .lock()
+        .ok()
+        .and_then(|t| t.clone())
+        .is_some_and(|(d, t)| d == dir && t.elapsed() < WRITE_TEST_TTL);
+    if fresh {
+        return Ok(Ok(()));
+    }
+    let probe = dir.join(format!(".reelix-write-test-{:016x}", rand::random::<u64>()));
+    let tested = dir.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        std::fs::write(&probe, b"ok")?;
+        std::fs::remove_file(&probe)
+    })
+    .await;
+    if let Ok(mut last) = LAST_OK.lock() {
+        *last = matches!(res, Ok(Ok(()))).then(|| (tested, std::time::Instant::now()));
+    }
+    res
+}
+
 async fn run_health_checks(state: &AppState) -> Vec<HealthCheck> {
     let mut checks = Vec::new();
     checks.push(match state.db().ping().await {
@@ -72,12 +104,7 @@ async fn run_health_checks(state: &AppState) -> Vec<HealthCheck> {
         }
     });
     let dir = state.config().data_dir.clone();
-    let probe = dir.join(format!(".reelix-write-test-{:016x}", rand::random::<u64>()));
-    let writable = tokio::task::spawn_blocking(move || {
-        std::fs::write(&probe, b"ok")?;
-        std::fs::remove_file(&probe)
-    })
-    .await;
+    let writable = data_dir_writable(dir.clone()).await;
     checks.push(match writable {
         Ok(Ok(())) => check(
             "data_dir",

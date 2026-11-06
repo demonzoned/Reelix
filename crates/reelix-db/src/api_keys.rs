@@ -29,6 +29,9 @@ fn map_key(row: &SqliteRow) -> Result<ApiKey> {
 }
 
 /// API keys. `key_hash` is the hex sha256 of the raw key.
+/// How fresh `last_used_at` is kept: at most one write per key in this time.
+pub const LAST_USED_GRANULARITY_MS: i64 = 5 * 60 * 1000;
+
 pub struct ApiKeyRepo<'a> {
     pub(crate) db: &'a Db,
 }
@@ -69,15 +72,25 @@ impl ApiKeyRepo<'_> {
         Ok(r.rows_affected() > 0)
     }
 
-    /// The key's owner; also stamps `last_used_at = now`.
+    /// The key's owner; also stamps `last_used_at = now` when the last stamp is older than
+    /// [`LAST_USED_GRANULARITY_MS`], so a key polled every few seconds (a dashboard, Torznab, an *arr
+    /// client) is not a database write on every request.
     pub async fn find_user(&self, key_hash: &str) -> Result<Option<User>> {
-        let user_id: Option<i64> =
-            sqlx::query_scalar("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ? RETURNING user_id")
-                .bind(now_ms())
+        let row: Option<(i64, Option<i64>)> =
+            sqlx::query_as("SELECT user_id, last_used_at FROM api_keys WHERE key_hash = ?")
                 .bind(key_hash)
                 .fetch_optional(self.db.pool())
                 .await?;
-        match user_id {
+        let now = now_ms();
+        let user_id = row.map(|(id, last)| (id, last.is_none_or(|t| now - t >= LAST_USED_GRANULARITY_MS)));
+        if let Some((_, true)) = user_id {
+            sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?")
+                .bind(now)
+                .bind(key_hash)
+                .execute(self.db.pool())
+                .await?;
+        }
+        match user_id.map(|(id, _)| id) {
             Some(id) => self.db.users().get(id).await,
             None => Ok(None),
         }
@@ -109,6 +122,22 @@ mod tests {
         let listed = db.api_keys().list_for_user(alice.id).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert!(listed[0].last_used_at.is_some());
+        // A second use soon after does not write again; an old stamp is refreshed.
+        let first = listed[0].last_used_at;
+        db.api_keys().find_user("h1").await.unwrap().unwrap();
+        assert_eq!(
+            db.api_keys().list_for_user(alice.id).await.unwrap()[0].last_used_at,
+            first
+        );
+        sqlx::query("UPDATE api_keys SET last_used_at = 1 WHERE key_hash = 'h1'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        db.api_keys().find_user("h1").await.unwrap().unwrap();
+        let refreshed = db.api_keys().list_for_user(alice.id).await.unwrap()[0]
+            .last_used_at
+            .unwrap();
+        assert!(refreshed.timestamp_millis() > 1);
         assert!(db.api_keys().list_for_user(bob.id).await.unwrap().is_empty());
         assert!(db.api_keys().find_user("nope").await.unwrap().is_none());
 
