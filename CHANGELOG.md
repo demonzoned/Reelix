@@ -6,6 +6,9 @@ When releasing, rename `Unreleased` to the version and date (`## [0.2.0] - 2026-
 
 ## [Unreleased]
 
+### Added
+- **Other addresses for TMDB and TVDB.** `metadata.tmdb_base_url` and `metadata.tvdb_base_url` in `config.toml` (or `REELIX_TMDB_BASE_URL` and `REELIX_TVDB_BASE_URL`) point Reelix at a mirror, a caching proxy or a test stand-in. Until now only the test suite could change them.
+
 ## [0.8.6] - 2026-11-06
 
 ### Security

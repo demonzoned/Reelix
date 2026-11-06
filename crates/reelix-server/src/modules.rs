@@ -54,7 +54,12 @@ impl Modules {
             deps.secrets.clone(),
             deps.events.clone(),
             deps.http.clone(),
-            reelix_providers::ProviderOptions::new(&deps.data_dir),
+            {
+                let mut o = reelix_providers::ProviderOptions::new(&deps.data_dir);
+                o.tmdb_base_url = deps.config.tmdb_base_url.clone();
+                o.tvdb_base_url = deps.config.tvdb_base_url.clone();
+                o
+            },
         )
         .await?;
         // library (TMDB resolved per call from the providers' metadata settings)

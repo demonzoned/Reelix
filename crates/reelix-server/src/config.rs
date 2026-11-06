@@ -45,6 +45,17 @@ struct RawConfig {
     paths: RawPaths,
     security: RawSecurity,
     logging: RawLogging,
+    metadata: RawMetadata,
+}
+
+/// Other addresses for the metadata services, for a mirror, a caching proxy or a test stand-in.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct RawMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tmdb_base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tvdb_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +150,10 @@ pub struct Config {
     pub secure_cookies: SecureCookies,
     pub log_level: String,
     pub log_format: LogFormat,
+    /// TMDB API address instead of `https://api.themoviedb.org/3` (`metadata.tmdb_base_url`).
+    pub tmdb_base_url: Option<String>,
+    /// TVDB API address instead of the default (`metadata.tvdb_base_url`).
+    pub tvdb_base_url: Option<String>,
     /// Config file that was read, if any.
     pub config_file: Option<PathBuf>,
     /// Settings forced by command-line flags (`port`, `bind`, `data_dir`).
@@ -221,6 +236,20 @@ impl Config {
             .map(|p| p.parse())
             .collect::<Result<Vec<_>, String>>()
             .map_err(|e| Box::new(figment::Error::from(format!("security.trusted_proxies: {e}"))))?;
+        let base_url = |name: &str, v: Option<String>| -> Result<Option<String>, ConfigError> {
+            match v
+                .map(|u| u.trim().trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty())
+            {
+                Some(u) if u.starts_with("http://") || u.starts_with("https://") => Ok(Some(u)),
+                Some(u) => Err(Box::new(figment::Error::from(format!(
+                    "metadata.{name}: {u:?} must start with http:// or https://"
+                )))),
+                None => Ok(None),
+            }
+        };
+        let tmdb_base_url = base_url("tmdb_base_url", raw.metadata.tmdb_base_url)?;
+        let tvdb_base_url = base_url("tvdb_base_url", raw.metadata.tvdb_base_url)?;
         let data_dir = raw.paths.data_dir;
         let database_url = raw
             .database
@@ -243,6 +272,8 @@ impl Config {
             secure_cookies: raw.security.secure_cookies,
             log_level: raw.logging.level,
             log_format: raw.logging.format,
+            tmdb_base_url,
+            tvdb_base_url,
             data_dir,
             config_file,
             cli_overrides: Vec::new(),
@@ -277,6 +308,8 @@ pub(crate) fn env_key(key: &str) -> Option<&'static str> {
         "secure_cookies" => "security.secure_cookies",
         "log_level" => "logging.level",
         "log_format" => "logging.format",
+        "tmdb_base_url" => "metadata.tmdb_base_url",
+        "tvdb_base_url" => "metadata.tvdb_base_url",
         _ => return None,
     })
 }
@@ -339,6 +372,11 @@ pub fn default_config_template() -> String {
 # level = "info"
 # pretty | json
 # format = "pretty"
+
+[metadata]
+# Other addresses for TMDB and TVDB: a mirror, a caching proxy or a test stand-in.
+# tmdb_base_url = "https://api.themoviedb.org/3"
+# tvdb_base_url = "https://api4.thetvdb.com/v4"
 "#
     )
 }
@@ -453,6 +491,30 @@ mod tests {
             assert_eq!(cfg.port, 8003);
             assert_eq!(cfg.bind, "::1".parse::<IpAddr>().unwrap());
             assert_eq!(cfg.url_base, "/other");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn metadata_addresses_from_file_and_env() {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.create_dir("data")?;
+            let cfg = load(&CliOverrides::default())?;
+            assert_eq!((cfg.tmdb_base_url, cfg.tvdb_base_url), (None, None));
+            jail.create_file(
+                "data/config.toml",
+                "[metadata]\ntmdb_base_url = \"http://mirror:8000/3/\"\n",
+            )?;
+            let cfg = load(&CliOverrides::default())?;
+            assert_eq!(cfg.tmdb_base_url.as_deref(), Some("http://mirror:8000/3"));
+            jail.set_env("REELIX_TVDB_BASE_URL", "https://tvdb.test/v4");
+            let cfg = load(&CliOverrides::default())?;
+            assert_eq!(cfg.tvdb_base_url.as_deref(), Some("https://tvdb.test/v4"));
+            // An address that is not http(s) is refused. Set in the file, not the environment: tests
+            // that run alongside read the process environment.
+            jail.create_file("data/config.toml", "[metadata]\ntmdb_base_url = \"ftp://nope\"\n")?;
+            assert!(load(&CliOverrides::default()).is_err());
             Ok(())
         });
     }
