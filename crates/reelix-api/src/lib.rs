@@ -42,6 +42,10 @@ pub fn router(state: AppState) -> Router {
         .route("/system/health", get(system::health))
         .route("/system/tasks", get(system::tasks))
         .route("/system/tasks/{kind}/run", post(system::run_task))
+        .route(
+            "/system/background-work",
+            get(system::background_work).put(system::set_background_work),
+        )
         .route("/system/jobs", get(system::jobs))
         .route("/ws", get(ws::ws))
         .route("/openapi.json", get(openapi_json))
@@ -121,6 +125,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         routes::system::health,
         routes::system::tasks,
         routes::system::run_task,
+        routes::system::background_work,
+        routes::system::set_background_work,
         routes::system::jobs,
         routes::ws::ws,
     ),
@@ -138,6 +144,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         reelix_api_types::HealthCheck,
         reelix_api_types::HealthReport,
         reelix_api_types::TaskDto,
+        reelix_api_types::BackgroundWorkDto,
         reelix_api_types::JobDto,
         reelix_api_types::EnqueuedJob,
     )),

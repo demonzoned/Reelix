@@ -2,7 +2,8 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use reelix_api_types::{
-    ApiErrorBody, EnqueuedJob, HealthCheck, HealthLevel, HealthReport, JobDto, SystemStatus, TaskDto,
+    ApiErrorBody, BackgroundWorkDto, EnqueuedJob, HealthCheck, HealthLevel, HealthReport, JobDto,
+    SystemStatus, TaskDto,
 };
 use reelix_core::{Permissions, VERSION};
 use reelix_db::DbError;
@@ -132,6 +133,7 @@ fn check(source: &str, level: HealthLevel, message: String) -> HealthCheck {
 pub async fn tasks(State(state): State<AppState>, user: CurrentUser) -> ApiResult<ApiJson<Vec<TaskDto>>> {
     user.require(Permissions::ADMIN)?;
     let db = state.db();
+    let pace = state.jobs().pace();
     let mut out = Vec::new();
     for t in db.tasks().list().await? {
         let running = db.jobs().is_active(&t.kind).await?;
@@ -145,9 +147,49 @@ pub async fn tasks(State(state): State<AppState>, user: CurrentUser) -> ApiResul
             last_duration_ms: t.last_duration_ms,
             last_error: t.last_error,
             running,
+            paced_interval_secs: pace.apply(t.interval_secs),
         });
     }
     Ok(ApiJson(out))
+}
+
+/// The background work pace (admin).
+#[utoipa::path(get, path = "/api/v1/system/background-work", tag = "system",
+    security(("session" = []), ("api_key" = [])),
+    responses(
+        (status = 200, description = "Current pace", body = BackgroundWorkDto),
+        (status = 401, description = "Not authenticated", body = ApiErrorBody),
+        (status = 403, description = "Admin only", body = ApiErrorBody),
+    ))]
+pub async fn background_work(
+    State(state): State<AppState>,
+    user: CurrentUser,
+) -> ApiResult<ApiJson<BackgroundWorkDto>> {
+    user.require(Permissions::ADMIN)?;
+    Ok(ApiJson(BackgroundWorkDto {
+        pace: state.jobs().pace(),
+    }))
+}
+
+/// Sets the background work pace (admin). Applies without a restart.
+#[utoipa::path(put, path = "/api/v1/system/background-work", tag = "system",
+    request_body = BackgroundWorkDto,
+    security(("session" = []), ("api_key" = [])),
+    responses(
+        (status = 200, description = "Saved", body = BackgroundWorkDto),
+        (status = 400, description = "Unknown pace", body = ApiErrorBody),
+        (status = 401, description = "Not authenticated", body = ApiErrorBody),
+        (status = 403, description = "Admin only", body = ApiErrorBody),
+    ))]
+pub async fn set_background_work(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    ApiJson(req): ApiJson<BackgroundWorkDto>,
+) -> ApiResult<ApiJson<BackgroundWorkDto>> {
+    user.require(Permissions::ADMIN)?;
+    state.jobs().set_pace(req.pace).await?;
+    tracing::info!(pace = ?req.pace, user = %user.user.username, "background work pace changed");
+    Ok(ApiJson(req))
 }
 
 /// Runs a scheduled task now (admin). `job_id` is null if one is already queued or running.

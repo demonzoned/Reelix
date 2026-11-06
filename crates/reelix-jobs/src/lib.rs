@@ -7,13 +7,13 @@
 pub mod builtin;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use reelix_core::DomainEvent;
 use reelix_core::bus::EventBus;
-use reelix_core::jobs::JobStatus;
+use reelix_core::jobs::{BACKGROUND_PACE_KEY, BackgroundPace, JobStatus};
 use reelix_db::{Db, DbError, Job, NewJob, now_ms};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -52,6 +52,8 @@ struct QueueInner {
     events: EventBus,
     notify: Notify,
     tasks: HashSet<&'static str>,
+    /// How far scheduled task intervals are stretched (Settings, Background work).
+    pace: RwLock<BackgroundPace>,
 }
 
 /// Handle for enqueueing jobs; cheap to clone.
@@ -82,6 +84,30 @@ impl JobQueue {
 
     fn wake(&self) {
         self.inner.notify.notify_one();
+    }
+
+    /// The current background work pace.
+    pub fn pace(&self) -> BackgroundPace {
+        *self.inner.pace.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Saves a new pace. A slower pace applies from each task's next run; a faster one also
+    /// brings forward any task whose next run is now further away than its new interval.
+    pub async fn set_pace(&self, pace: BackgroundPace) -> reelix_db::Result<()> {
+        let db = &self.inner.db;
+        db.settings().set(BACKGROUND_PACE_KEY, &pace).await?;
+        *self.inner.pace.write().unwrap_or_else(|e| e.into_inner()) = pace;
+        let now = now_ms();
+        for task in db.tasks().list().await? {
+            let soonest = now + pace.apply(task.interval_secs) * 1000;
+            if task.next_run.is_some_and(|n| n.timestamp_millis() > soonest) {
+                db.tasks().schedule_next(&task.kind, soonest).await?;
+                self.inner
+                    .events
+                    .publish(DomainEvent::TaskUpdated { kind: task.kind });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -196,6 +222,7 @@ impl JobSystemBuilder {
                 events: self.events,
                 notify: Notify::new(),
                 tasks,
+                pace: RwLock::new(BackgroundPace::Normal),
             }),
         };
         let mut handlers = HashMap::new();
@@ -254,6 +281,16 @@ impl JobSystem {
         tokio::spawn(async move {
             let shared = self.shared;
             let db = &shared.queue.inner.db;
+            match db.settings().get::<BackgroundPace>(BACKGROUND_PACE_KEY).await {
+                Ok(Some(pace)) => {
+                    *shared.queue.inner.pace.write().unwrap_or_else(|e| e.into_inner()) = pace;
+                    if pace != BackgroundPace::Normal {
+                        tracing::info!(?pace, "background work runs at a slower pace");
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!(error = %e, "could not read the background work pace; using normal"),
+            }
             match db.jobs().requeue_running().await {
                 Ok(0) => {}
                 Ok(n) => tracing::info!(count = n, "re-queued jobs interrupted by a previous shutdown"),
@@ -486,6 +523,7 @@ async fn schedule_tick(shared: &Shared) {
     let queue = &shared.queue;
     let db = &queue.inner.db;
     let now = now_ms();
+    let pace = queue.pace();
     let due = match db.tasks().due(now).await {
         Ok(due) => due,
         Err(e) => {
@@ -501,7 +539,7 @@ async fn schedule_tick(shared: &Shared) {
             tracing::error!(kind = task.kind, error = %e, "failed to enqueue scheduled task");
             continue;
         }
-        let next = now + (task.interval_secs.max(1) * 1000);
+        let next = now + pace.apply(task.interval_secs) * 1000;
         match db.tasks().schedule_next(&task.kind, next).await {
             Ok(()) => queue
                 .inner

@@ -532,3 +532,56 @@ async fn shutdown_cancels_and_waits_for_running_jobs() {
         JobStatus::Completed
     );
 }
+
+#[tokio::test]
+async fn background_pace_stretches_the_next_run_and_can_be_changed() {
+    use reelix_core::jobs::{BACKGROUND_PACE_KEY, BackgroundPace};
+
+    let db = Db::in_memory().await.unwrap();
+    let bus = EventBus::default();
+    let mut rx = bus.subscribe();
+    // Saved before start, as after a restart.
+    db.settings()
+        .set(BACKGROUND_PACE_KEY, &BackgroundPace::Light)
+        .await
+        .unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let sys = fast(&db, &bus)
+        .handler(Counter { kind: "tick", runs })
+        .task(TaskDef {
+            kind: "tick",
+            name: "Tick",
+            interval: Duration::from_secs(60),
+            run_on_startup: true,
+        })
+        .build();
+    let queue = sys.queue();
+    let cancel = CancellationToken::new();
+    let before = now_ms();
+    let handle = sys.start(cancel.clone());
+    wait_for(
+        &mut rx,
+        |e| matches!(e, DomainEvent::JobFinished { kind, .. } if kind == "tick"),
+    )
+    .await;
+    assert_eq!(queue.pace(), BackgroundPace::Light);
+    // Light: 20 times the 60 second interval.
+    let next = db.tasks().get("tick").await.unwrap().unwrap().next_run.unwrap();
+    assert!(next.timestamp_millis() >= before + 20 * 60_000, "{next}");
+
+    // Back to normal: the far-off run is brought forward to one interval from now.
+    let changed = now_ms();
+    queue.set_pace(BackgroundPace::Normal).await.unwrap();
+    let next = db.tasks().get("tick").await.unwrap().unwrap().next_run.unwrap();
+    assert!(next.timestamp_millis() <= changed + 60_000 + 1_000, "{next}");
+    assert_eq!(
+        db.settings()
+            .get::<BackgroundPace>(BACKGROUND_PACE_KEY)
+            .await
+            .unwrap(),
+        Some(BackgroundPace::Normal)
+    );
+
+    cancel.cancel();
+    handle.await.unwrap();
+}
