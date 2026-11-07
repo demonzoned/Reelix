@@ -46,6 +46,17 @@ fn no_shared_memory(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Database(d) if matches!(d.code().as_deref(), Some("4618" | "4874" | "5386")))
 }
 
+/// The file beside the database that records that the write-ahead log cannot be used there.
+fn no_wal_marker(db_file: &std::path::Path) -> std::path::PathBuf {
+    let mut name = db_file.as_os_str().to_owned();
+    name.push(".no-wal");
+    std::path::PathBuf::from(name)
+}
+
+const NO_WAL_MARKER_TEXT: &str = "Reelix found that SQLite's write-ahead log cannot be used in this folder \
+(its shared-memory file could not be used), so the database uses a rollback journal. Remove this file to \
+try the write-ahead log again, for example after moving the data folder to a local disk.\n";
+
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/sqlite");
 
 /// Current time as unix milliseconds.
@@ -85,16 +96,37 @@ impl Db {
         {
             std::fs::create_dir_all(parent)?;
         }
+        // An earlier start found that this file system cannot share memory: go straight to the
+        // rollback journal, rather than set WAL and turn it back (rewriting the file) every start.
+        let marker = no_wal_marker(&file);
+        if marker.exists() {
+            tracing::warn!(
+                file = %file.display(),
+                marker = %marker.display(),
+                "the write-ahead log is off for this database, as an earlier start found it could not \
+                 be used here; remove the marker file to try it again, for example after moving the \
+                 data folder to a local disk"
+            );
+            return Self::migrated(Self::open_without_shared_memory(opts).await?).await;
+        }
         match Self::open(opts.clone().journal_mode(SqliteJournalMode::Wal)).await {
             Ok(pool) => Self::migrated(pool).await,
             Err(DbError::Sqlx(e)) if no_shared_memory(&e) => {
                 tracing::warn!(
                     file = %file.display(),
                     error = %e,
-                    "this file system cannot share memory between database connections, so the \
-                     write-ahead log is off; keep the data folder on a local disk for the best speed"
+                    "SQLite could not use the shared-memory file (-shm) beside the database, so the \
+                     write-ahead log is off and a rollback journal is used. Either this file system \
+                     cannot map shared memory (such as a FUSE pool or a network share), or the -shm \
+                     file cannot be opened (check its owner and permissions). Keep the data folder on \
+                     a local disk for the best speed and safety: on a network share, file locking can \
+                     be unreliable whichever journal is used"
                 );
-                Self::migrated(Self::open_without_shared_memory(opts).await?).await
+                let pool = Self::open_without_shared_memory(opts).await?;
+                if let Err(e) = std::fs::write(&marker, NO_WAL_MARKER_TEXT) {
+                    tracing::warn!(marker = %marker.display(), error = %e, "could not remember that the write-ahead log is off");
+                }
+                Self::migrated(pool).await
             }
             Err(e) => Err(e),
         }
@@ -129,8 +161,12 @@ impl Db {
     /// A rollback journal in place of WAL. A database already in WAL mode can only be opened without
     /// shared memory under an exclusive lock, so one connection first turns it back (which also
     /// checkpoints the log into the file); the pool then opens it in DELETE mode.
+    ///
+    /// Without the write-ahead log, `synchronous=NORMAL` can lose or corrupt the latest writes on a
+    /// power cut, so the rollback journal uses `FULL`.
     async fn open_without_shared_memory(opts: SqliteConnectOptions) -> Result<SqlitePool> {
         use sqlx::Connection;
+        let opts = opts.synchronous(SqliteSynchronous::Full);
         let convert = opts
             .clone()
             .locking_mode(SqliteLockingMode::Exclusive)
@@ -269,6 +305,37 @@ mod tests {
             Some("yes")
         );
         assert!(!dir.path().join("reelix.db-wal").exists());
+    }
+
+    #[tokio::test]
+    async fn a_remembered_fallback_opens_with_a_full_sync_rollback_journal() {
+        // An earlier start fell back and left the marker: this start does not try WAL again, and
+        // the rollback journal syncs fully.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reelix.db");
+        let url = format!("sqlite://{}", path.display());
+        {
+            let db = Db::connect(&url).await.unwrap();
+            db.settings().set("kept", "yes").await.unwrap();
+            db.pool().close().await;
+        }
+        std::fs::write(no_wal_marker(&path), NO_WAL_MARKER_TEXT).unwrap();
+        let db = Db::connect(&url).await.unwrap();
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(mode, "delete");
+        let sync: i64 = sqlx::query_scalar("PRAGMA synchronous")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(sync, 2, "FULL");
+        assert_eq!(
+            db.settings().get::<String>("kept").await.unwrap().as_deref(),
+            Some("yes")
+        );
+        assert_eq!(no_wal_marker(&path), dir.path().join("reelix.db.no-wal"));
     }
 
     #[test]
