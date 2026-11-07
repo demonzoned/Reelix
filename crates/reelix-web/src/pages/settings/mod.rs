@@ -18,6 +18,7 @@ pub mod security;
 pub mod tags;
 pub mod ui;
 pub mod users;
+pub mod wizard;
 
 pub use custom_formats::CustomFormatsPage;
 pub use download_clients::DownloadClientsPage;
@@ -37,3 +38,4 @@ pub use security::SecuritySettingsPage;
 pub use tags::TagsPage;
 pub use ui::UiSettingsPage;
 pub use users::UsersPage;
+pub use wizard::WizardSettingsPage;

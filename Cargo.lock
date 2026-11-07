@@ -3811,6 +3811,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcodegen"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
+
+[[package]]
 name = "quick-xml"
 version = "0.38.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4672,12 +4678,14 @@ dependencies = [
  "futures",
  "hex",
  "http-body-util",
+ "qrcodegen",
  "rand 0.8.8",
  "reelix-api",
  "reelix-api-types",
  "reelix-books",
  "reelix-core",
  "reelix-db",
+ "reelix-decision",
  "reelix-direct",
  "reelix-jobs",
  "reelix-library",
@@ -4693,6 +4701,8 @@ dependencies = [
  "reelix-radio",
  "reelix-requests",
  "reqwest",
+ "rpassword",
+ "rustix 1.1.6",
  "semver",
  "serde",
  "serde_json",
@@ -4700,6 +4710,7 @@ dependencies = [
  "sqlx",
  "tar",
  "tempfile",
+ "terminal_size",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
@@ -4865,6 +4876,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpassword"
+version = "7.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2da316a15f47e3d053de9cb2c439650bd8fa4aaeb9365f2e5f27f492ff73c196"
+dependencies = [
+ "libc",
+ "rtoolbox",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rquickjs"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4923,6 +4945,16 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rtoolbox"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a1efe12a1469752d0e6ff5ebec0b6ef4924cc5c4c71046b0ec730040535819d"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6004,6 +6036,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08"
 dependencies = [
  "new_debug_unreachable",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix 1.1.6",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

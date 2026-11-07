@@ -100,6 +100,7 @@ pub fn App() -> impl IntoView {
                             <Route path=path!("settings/importlists") view=pages::settings::ImportListsPage />
                             <Route path=path!("settings/metadata") view=pages::settings::MetadataPage />
                             <Route path=path!("settings/tags") view=pages::settings::TagsPage />
+                            <Route path=path!("settings/wizard") view=pages::settings::WizardSettingsPage />
                             <Route path=path!("books") view=pages::books::AuthorsPage />
                             <Route path=path!("books/add") view=pages::books::AddAuthorPage />
                             <Route path=path!("books/import") view=pages::books::ImportAuthorsPage />

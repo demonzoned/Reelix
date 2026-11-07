@@ -11,5 +11,6 @@ pub mod maintenance;
 pub mod modules;
 pub mod server;
 pub mod service;
+pub mod setup_wizard;
 pub mod telemetry;
 pub mod web;

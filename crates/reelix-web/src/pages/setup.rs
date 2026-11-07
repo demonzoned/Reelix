@@ -1,75 +1,146 @@
-//! `/setup` — first-run wizard: create the admin account, then optionally connect a media server,
-//! root folders, a download client and indexers and pick request defaults. Every step after the
-//! account reuses the matching settings component and can be skipped.
+//! `/setup`: the first-run install wizard.
+//!
+//! The first question picks one of three workflows: a new install, restoring a Reelix backup, or
+//! migrating from the *arr apps. Every step, question, answer and help text comes from
+//! [`reelix_api_types::install`], which the terminal wizard (`reelix setup`) reads too, so both ask
+//! the same questions in the same order. Each answer is saved to the setting Reelix already has.
+//! Steps after the account can be skipped and changed later in Settings.
+//!
+//! Send feedback (Snaglist, loaded on first use from `snaglist/feedback.js`) is always in the
+//! header, and each report names the step it came from.
+
+use std::collections::BTreeSet;
 
 use leptos::ev;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_navigate;
-use reelix_api_types::providers::ProviderKind;
+use reelix_api_types::install::{
+    self, Answers, Context, HELP_CENTRE, Help, PLACEHOLDER_NOTE, Provider, Question, Start, StepId,
+};
+use reelix_api_types::providers::{MetadataSettingsDto, ProviderKind, TestResultDto};
 use reelix_api_types::requests::RequestSettingsDto;
+use reelix_api_types::system::PendingRestoreDto;
 use reelix_api_types::{SetupRequest, SetupStatus, UserDto};
+use reelix_core::Protocol;
+use reelix_decision::{DelayProfile, QualityProfile};
+use wasm_bindgen::JsCast;
 
 use crate::api;
 use crate::components::provider_form::ProviderListCard;
-use crate::components::{Card, ErrorBox, Icon, Logo, Skeleton};
+use crate::components::{Icon, Logo, Modal};
 use crate::pages::settings::media_management::RootFoldersCard;
-use crate::pages::settings::requests::DefaultsEditor;
-use crate::state::{AuthState, Boot, Toasts};
+use crate::pages::system::migrate::MigratePage;
+use crate::state::{AuthState, Boot, Theme, Toasts};
 
-struct Step {
-    title: &'static str,
-    blurb: &'static str,
+/// Opens Send feedback for `step`, with Reelix's own error message when a step failed.
+fn open_feedback(step: &str, title: &str, error: Option<&str>) -> bool {
+    let Some(win) = web_sys::window() else {
+        return false;
+    };
+    let Ok(fb) = js_sys::Reflect::get(&win, &"reelixFeedback".into()) else {
+        return false;
+    };
+    let Ok(open) = js_sys::Reflect::get(&fb, &"open".into()) else {
+        return false;
+    };
+    match open.dyn_into::<js_sys::Function>() {
+        Ok(f) => f
+            .call3(&fb, &step.into(), &title.into(), &error.unwrap_or("").into())
+            .is_ok(),
+        Err(_) => false,
+    }
 }
 
-const STEPS: &[Step] = &[
-    Step {
-        title: "Welcome",
-        blurb: "",
-    },
-    Step {
-        title: "Admin account",
-        blurb: "",
-    },
-    Step {
-        title: "Media server",
-        blurb: "Connect Jellyfin, Emby or Plex so Reelix can refresh libraries after imports and track availability for requests.",
-    },
-    Step {
-        title: "Root folders",
-        blurb: "Tell Reelix where your movies, series, books and music live on disk. Add at least one folder for each type you plan to manage.",
-    },
-    Step {
-        title: "Download client",
-        blurb: "Hook up qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet or a blackhole folder. Use Test to check the connection.",
-    },
-    Step {
-        title: "Indexers",
-        blurb: "Add Torznab/Newznab indexers or pick a site from the built-in definition catalog.",
-    },
-    Step {
-        title: "Default profiles",
-        blurb: "Choose the quality profile and root folder that approved requests and list imports start with. You can change these per title.",
-    },
-    Step {
-        title: "Finish",
-        blurb: "",
-    },
-];
+/// Moves focus to the new step's heading, so keyboard and screen reader users start at the top.
+fn focus_heading() {
+    request_animation_frame(|| {
+        if let Some(el) = document()
+            .get_element_by_id("wizard-heading")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = el.focus();
+        }
+    });
+}
 
-const ACCOUNT: usize = 1;
-const FINISH: usize = STEPS.len() - 1;
+#[derive(Clone, Copy)]
+struct Wizard {
+    answers: RwSignal<Answers>,
+    ctx: RwSignal<Context>,
+    current: RwSignal<StepId>,
+    skipped: RwSignal<BTreeSet<StepKey>>,
+    /// Back stops here: the account (or the restore) changed something that cannot be undone.
+    floor: RwSignal<Option<StepId>>,
+    error: RwSignal<Option<String>>,
+    busy: RwSignal<bool>,
+    help: RwSignal<Option<&'static Help>>,
+    help_open: RwSignal<bool>,
+}
 
-fn validate_username(u: &str) -> Option<&'static str> {
-    if u.is_empty() || u.chars().count() > 64 {
-        Some("Use 1–64 characters.")
-    } else if !u
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
-        Some("Only letters, digits, dots, dashes and underscores are allowed.")
-    } else {
-        None
+/// `StepId` in a `BTreeSet`, by its position in [`install::STEPS`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct StepKey(usize);
+
+impl StepKey {
+    fn of(id: StepId) -> Self {
+        Self(install::STEPS.iter().position(|s| s.id == id).unwrap_or(0))
+    }
+}
+
+impl Wizard {
+    fn shown(&self) -> Vec<StepId> {
+        install::steps_shown(&self.answers.get(), self.ctx.get())
+    }
+
+    fn go(&self, to: StepId) {
+        self.error.set(None);
+        self.help_open.set(false);
+        self.current.set(to);
+        focus_heading();
+    }
+
+    fn next(&self) {
+        let shown = install::steps_shown(&self.answers.get_untracked(), self.ctx.get_untracked());
+        let cur = self.current.get_untracked();
+        if let Some(i) = shown.iter().position(|s| *s == cur)
+            && let Some(n) = shown.get(i + 1)
+        {
+            self.go(*n);
+        }
+    }
+
+    fn skip(&self) {
+        let cur = self.current.get_untracked();
+        self.skipped.update(|s| {
+            s.insert(StepKey::of(cur));
+        });
+        self.next();
+    }
+
+    fn done(&self) {
+        let cur = self.current.get_untracked();
+        self.skipped.update(|s| {
+            s.remove(&StepKey::of(cur));
+        });
+        self.next();
+    }
+
+    fn back_target(&self) -> Option<StepId> {
+        let shown = self.shown();
+        let cur = self.current.get();
+        let i = shown.iter().position(|s| *s == cur)?;
+        let prev = *shown.get(i.checked_sub(1)?)?;
+        let floor_at = self.floor.get().and_then(|f| shown.iter().position(|s| *s == f));
+        match floor_at {
+            Some(f) if i <= f + 1 => None,
+            _ => Some(prev),
+        }
+    }
+
+    fn fail(&self, message: impl Into<String>) {
+        self.error.set(Some(message.into()));
+        self.busy.set(false);
     }
 }
 
@@ -77,273 +148,147 @@ fn validate_username(u: &str) -> Option<&'static str> {
 pub fn SetupPage() -> impl IntoView {
     let auth = AuthState::expect();
     let toasts = Toasts::expect();
+    let theme = Theme::expect();
     let navigate = use_navigate();
-    let step = RwSignal::new(0usize);
-    let account_done = RwSignal::new(false);
+    let wizard = Wizard {
+        answers: RwSignal::new(Answers::with_defaults()),
+        ctx: RwSignal::new(Context::default()),
+        current: RwSignal::new(StepId::Start),
+        skipped: RwSignal::new(BTreeSet::new()),
+        floor: RwSignal::new(None),
+        error: RwSignal::new(None),
+        busy: RwSignal::new(false),
+        help: RwSignal::new(None),
+        help_open: RwSignal::new(false),
+    };
 
-    // Setup already happened (e.g. someone opened /setup by hand): leave. Runs once.
-    {
-        let navigate = navigate.clone();
-        Effect::new(move |_| {
-            if auth.boot.get_untracked() == Boot::Ready {
-                let to = if auth.user.with_untracked(Option::is_some) {
-                    "/"
-                } else {
-                    "/login"
-                };
+    // Set-up already happened. An admin can run the wizard again (Settings, then Set-up wizard),
+    // without the code, the account or a restore; anyone else leaves. Runs once.
+    Effect::new(move |_| {
+        if auth.boot.get_untracked() == Boot::Ready {
+            if auth.is_admin() {
+                wizard.ctx.update(|c| c.signed_in = true);
+            } else {
+                let to = if auth.is_logged_in() { "/" } else { "/login" };
                 navigate(to, Default::default());
             }
-        });
-    }
-
-    // Remote browsers must enter the one-time token the server printed in its log.
-    let status = LocalResource::new(|| api::get::<SetupStatus>("/setup"));
-    let token_required = move || matches!(status.get(), Some(Ok(s)) if s.setup_token_required);
-    let setup_token = RwSignal::new(String::new());
-    let username = RwSignal::new(String::new());
-    let email = RwSignal::new(String::new());
-    let password = RwSignal::new(String::new());
-    let confirm = RwSignal::new(String::new());
-    let touched = RwSignal::new(false);
-    let busy = RwSignal::new(false);
-    let error = RwSignal::new(None::<String>);
-
-    let username_err = move || {
-        touched
-            .get()
-            .then(|| validate_username(username.get().trim()))
-            .flatten()
-    };
-    let password_err = move || {
-        (touched.get() && password.with(|p| p.chars().count() < 8)).then_some("Use at least 8 characters.")
-    };
-    let confirm_err =
-        move || (touched.get() && password.get() != confirm.get()).then_some("Passwords don't match.");
-    let token_err = move || {
-        (touched.get() && token_required() && setup_token.with(|t| t.trim().is_empty()))
-            .then_some("Copy the setup token from the server log.")
-    };
-
-    let create_account = move |e: ev::SubmitEvent| {
-        e.prevent_default();
-        touched.set(true);
-        if busy.get_untracked()
-            || username_err().is_some()
-            || password_err().is_some()
-            || confirm_err().is_some()
-            || token_err().is_some()
-        {
-            return;
         }
-        let email_value = email.get_untracked().trim().to_string();
-        let req = SetupRequest {
-            username: username.get_untracked().trim().to_string(),
-            password: password.get_untracked(),
-            email: (!email_value.is_empty()).then_some(email_value),
-            setup_token: Some(setup_token.get_untracked().trim().to_string()).filter(|t| !t.is_empty()),
-        };
-        busy.set(true);
-        error.set(None);
-        spawn_local(async move {
-            match api::post::<_, UserDto>("/setup", &req).await {
-                Ok(user) => {
-                    toasts.success(format!("Admin account “{}” created.", user.username));
-                    auth.sign_in(user);
-                    account_done.set(true);
-                    password.set(String::new());
-                    confirm.set(String::new());
-                    step.set(ACCOUNT + 1);
-                }
-                Err(e) if e.status == 409 => {
-                    error.set(Some(
-                        "Setup has already been completed on this server. Sign in instead.".into(),
-                    ));
-                }
-                Err(e) => error.set(Some(e.message)),
+    });
+
+    // From another computer, the set-up code the server printed is needed once.
+    spawn_local(async move {
+        if let Ok(s) = api::get::<SetupStatus>("/setup").await {
+            wizard.ctx.update(|c| c.code_required = s.setup_token_required);
+            if let Some(el) = document().document_element() {
+                let _ = el.set_attribute("data-reelix-version", &s.version);
             }
-            busy.set(false);
-        });
+        }
+    });
+
+    let code = RwSignal::new(String::new());
+    let feedback = move |error: Option<String>| {
+        let step = install::step(wizard.current.get_untracked());
+        if !open_feedback(step.key, step.title, error.as_deref()) {
+            toasts.error("Send feedback could not open. Reload the page and try again.");
+        }
     };
 
-    let finish = {
-        let navigate = navigate.clone();
-        move |_| navigate("/", Default::default())
+    let progress = move || {
+        let list = wizard.shown();
+        let cur = wizard.current.get();
+        let pos = list.iter().position(|s| *s == cur).unwrap_or(0);
+        (pos + 1, list.len())
     };
 
     let stepper = move || {
-        STEPS
-            .iter()
+        let list = wizard.shown();
+        let cur = wizard.current.get();
+        let pos = list.iter().position(|s| *s == cur).unwrap_or(0);
+        let skipped = wizard.skipped.get();
+        list.into_iter()
             .enumerate()
-            .map(|(i, s)| {
-                let state = move || {
-                    let cur = step.get();
-                    if i == cur {
-                        "current"
-                    } else if i < cur {
-                        "done"
-                    } else {
-                        "todo"
-                    }
+            .map(|(i, id)| {
+                let s = install::step(id);
+                let state = if i == pos {
+                    "current"
+                } else if i < pos && skipped.contains(&StepKey::of(id)) {
+                    "skipped"
+                } else if i < pos {
+                    "done"
+                } else {
+                    "todo"
+                };
+                let marker = match state {
+                    "done" => view! { <Icon name="check" /> }.into_any(),
+                    _ => (i + 1).into_any(),
+                };
+                let status = match state {
+                    "done" => "done",
+                    "skipped" => "skipped",
+                    "current" => "current step",
+                    _ => "to do",
                 };
                 view! {
-                    <li class=move || format!("step {}", state()) aria-current=move || (state() == "current").then_some("step")>
-                        <span class="step-marker" aria-hidden="true">
-                            {move || if state() == "done" { view! { <Icon name="check" /> }.into_any() } else { (i + 1).into_any() }}
-                        </span>
-                        <span class="step-label">
-                            {s.title}
-                        </span>
+                    <li class=format!("step {state}") aria-current=(state == "current").then_some("step")>
+                        <span class="step-marker" aria-hidden="true">{marker}</span>
+                        <span class="step-label">{s.title}<span class="visually-hidden">{format!(", {status}")}</span></span>
                     </li>
                 }
             })
             .collect_view()
     };
 
+    let progress_text = move || {
+        let (n, total) = progress();
+        let flow = if wizard.current.get() == StepId::Start {
+            "How to start"
+        } else {
+            wizard.answers.with(|a| a.start()).name()
+        };
+        let left = match total - n {
+            0 => "This is the last step.".to_owned(),
+            1 => "1 step left.".to_owned(),
+            l => format!("{l} steps left."),
+        };
+        format!("Step {n} of {total}, {flow}. {left}")
+    };
+    let progress_width = move || {
+        let (n, total) = progress();
+        format!("width: {}%", n * 100 / total.max(1))
+    };
+
     let body = move || {
-        let current = step.get();
-        match current {
-            0 => view! {
-                <div class="wizard-pane">
-                    <div class="wizard-hero">
-                        <Logo />
-                    </div>
-                    <h1 class="wizard-title">"Welcome to Reelix"</h1>
-                    <p class="wizard-lead">
-                        "One server for your movie and series library, indexers, downloads and requests. "
-                        "Create the administrator account, then connect your media server, folders, download client and indexers. Every step after the account can be skipped and changed later under Settings."
-                    </p>
-                    <ul class="feature-list">
-                        <li><Icon name="movies" />"Movies & series management"</li>
-                        <li><Icon name="indexers" />"Built-in indexer manager"</li>
-                        <li><Icon name="requests" />"Requests & discovery for your users"</li>
-                    </ul>
-                    <div class="wizard-actions">
-                        <span></span>
-                        <button type="button" class="btn btn-primary btn-lg" autofocus on:click=move |_| step.set(1)>
-                            "Get started"
-                            <Icon name="chevron" />
-                        </button>
+        let id = wizard.current.get();
+        let s = install::step(id);
+        view! {
+            <div class="wizard-pane" data-component=s.key>
+                <div class="wizard-progress">
+                    <p class="wizard-progress-text">{progress_text}</p>
+                    <div class="wizard-progress-bar" aria-hidden="true">
+                        <span style=progress_width></span>
                     </div>
                 </div>
-            }
-            .into_any(),
-            ACCOUNT => view! {
-                <form class="wizard-pane form" on:submit=create_account novalidate>
-                    <h1 class="wizard-title">"Create the admin account"</h1>
-                    <p class="wizard-lead">"This account has full control over Reelix. You can add more users later."</p>
-                    {move || error.get().map(|msg| view! {
+                <p class="wizard-stage">{s.stage}</p>
+                <h1 class="wizard-title" id="wizard-heading" tabindex="-1">{s.question}</h1>
+                <p class="wizard-lead">{s.lead}</p>
+                {move || wizard.error.get().map(|msg| {
+                    let report = msg.clone();
+                    view! {
                         <div class="alert alert-danger" role="alert">
                             <Icon name="error" />
-                            <div class="alert-body"><span>{msg}</span></div>
+                            <div class="alert-body">
+                                <span>{msg}</span>
+                                <button type="button" class="btn btn-ghost btn-sm" on:click=move |_| feedback(Some(report.clone()))>
+                                    "Report this problem"
+                                </button>
+                            </div>
                         </div>
-                    })}
-                    <Show when=token_required>
-                        <div class="field" class:invalid=move || token_err().is_some()>
-                            <label for="setup-token">"Setup token"</label>
-                            <input id="setup-token" class="input mono" type="text" autocomplete="off"
-                                autocapitalize="none" spellcheck="false" required
-                                aria-invalid=move || token_err().is_some().to_string()
-                                aria-describedby="setup-token-hint"
-                                prop:value=move || setup_token.get()
-                                on:input=move |e| setup_token.set(event_target_value(&e)) />
-                            <p id="setup-token-hint" class="field-hint">{move || token_err().unwrap_or("Printed in the server log when Reelix starts without any users.")}</p>
-                        </div>
-                    </Show>
-                    <div class="field" class:invalid=move || username_err().is_some()>
-                        <label for="setup-username">"Username"</label>
-                        <input id="setup-username" class="input" type="text" autocomplete="username"
-                            autocapitalize="none" spellcheck="false" maxlength="64" required autofocus
-                            aria-invalid=move || username_err().is_some().to_string()
-                            aria-describedby="setup-username-hint"
-                            prop:value=move || username.get()
-                            on:input=move |e| username.set(event_target_value(&e)) />
-                        <p id="setup-username-hint" class="field-hint">{move || username_err().unwrap_or("Letters, digits, dots, dashes and underscores.")}</p>
-                    </div>
-                    <div class="field">
-                        <label for="setup-email">"Email " <span class="optional">"(optional)"</span></label>
-                        <input id="setup-email" class="input" type="email" autocomplete="email"
-                            prop:value=move || email.get()
-                            on:input=move |e| email.set(event_target_value(&e)) />
-                    </div>
-                    <div class="field-row">
-                        <div class="field" class:invalid=move || password_err().is_some()>
-                            <label for="setup-password">"Password"</label>
-                            <input id="setup-password" class="input" type="password" autocomplete="new-password" required
-                                aria-invalid=move || password_err().is_some().to_string()
-                            aria-describedby="setup-password-hint"
-                                prop:value=move || password.get()
-                                on:input=move |e| password.set(event_target_value(&e)) />
-                            <p id="setup-password-hint" class="field-hint">{move || password_err().unwrap_or("At least 8 characters.")}</p>
-                        </div>
-                        <div class="field" class:invalid=move || confirm_err().is_some()>
-                            <label for="setup-confirm">"Confirm password"</label>
-                            <input id="setup-confirm" class="input" type="password" autocomplete="new-password" required
-                                aria-invalid=move || confirm_err().is_some().to_string()
-                            aria-describedby="setup-confirm-hint"
-                                prop:value=move || confirm.get()
-                                on:input=move |e| confirm.set(event_target_value(&e)) />
-                            <p id="setup-confirm-hint" class="field-hint">{move || confirm_err().unwrap_or(" ")}</p>
-                        </div>
-                    </div>
-                    <div class="wizard-actions">
-                        <button type="button" class="btn btn-ghost" on:click=move |_| step.set(0)>"Back"</button>
-                        <button type="submit" class="btn btn-primary btn-lg" disabled=move || busy.get()>
-                            {move || if busy.get() { "Creating account…" } else { "Create account" }}
-                        </button>
-                    </div>
-                </form>
-            }
-            .into_any(),
-            FINISH => view! {
-                <div class="wizard-pane">
-                    <div class="wizard-hero success"><Icon name="check" /></div>
-                    <h1 class="wizard-title">"You're all set"</h1>
-                    <p class="wizard-lead">
-                        "Reelix is running. Anything you skipped is under Settings, and the dashboard checklist shows what's still missing."
-                    </p>
-                    <div class="wizard-actions">
-                        <button type="button" class="btn btn-ghost" on:click=move |_| step.set(FINISH - 1)>"Back"</button>
-                        <button type="button" class="btn btn-primary btn-lg" autofocus on:click=finish.clone()>
-                            "Go to dashboard"
-                            <Icon name="chevron" />
-                        </button>
-                    </div>
-                </div>
-            }
-            .into_any(),
-            i => {
-                let s = &STEPS[i];
-                let back_target = if i == ACCOUNT + 1 && account_done.get_untracked() { None } else { Some(i - 1) };
-                let content = match i {
-                    2 => view! { <ProviderListCard kind=ProviderKind::MediaServer title="Media servers"
-                        description="For Plex, use “Sign in with Plex” in the form to fetch a token." /> }.into_any(),
-                    3 => view! { <RootFoldersCard /> }.into_any(),
-                    4 => view! { <ProviderListCard kind=ProviderKind::DownloadClient title="Download clients" /> }.into_any(),
-                    5 => view! { <ProviderListCard kind=ProviderKind::Indexer title="Indexers" /> }.into_any(),
-                    _ => view! { <DefaultProfiles on_saved=Callback::new(move |()| step.set(i + 1)) /> }.into_any(),
-                };
-                // The profiles step saves through its own button; the others persist as you go.
-                let saves_itself = i == FINISH - 1;
-                view! {
-                    <div class="wizard-pane">
-                        <h1 class="wizard-title">{s.title}</h1>
-                        <p class="wizard-lead">{s.blurb}</p>
-                        <div class="wizard-content">{content}</div>
-                        <div class="wizard-actions">
-                            {match back_target {
-                                Some(b) => view! { <button type="button" class="btn btn-ghost" on:click=move |_| step.set(b)>"Back"</button> }.into_any(),
-                                None => view! { <span></span> }.into_any(),
-                            }}
-                            <button type="button" class=if saves_itself { "btn btn-ghost" } else { "btn btn-primary" }
-                                on:click=move |_| step.set(i + 1)>
-                                {if saves_itself { "Skip" } else { "Continue" }}
-                                <Icon name="chevron" />
-                            </button>
-                        </div>
-                    </div>
-                }
-                .into_any()
-            }
+                    }
+                })}
+                <StepBody wizard=wizard id=id code=code />
+                <HelpLinks wizard=wizard help=s.help />
+                <StepActions wizard=wizard id=id code=code />
+            </div>
         }
     };
 
@@ -355,72 +300,591 @@ pub fn SetupPage() -> impl IntoView {
                         <Logo />
                         <span class="brand-name">"Reelix"</span>
                     </div>
-                    <p class="wizard-side-title">"First-run setup"</p>
+                    <p class="wizard-side-title">"Set-up"</p>
                     <ol class="stepper">{stepper}</ol>
                     <p class="wizard-side-foot">
                         {move || auth.server_version.get().map(|v| format!("Server v{v}")).unwrap_or_default()}
                     </p>
                 </aside>
-                <section class="wizard-main" aria-live="polite">{body}</section>
+                <section class="wizard-main">
+                    <div class="wizard-tools">
+                        <button type="button" class="btn btn-ghost btn-sm" on:click=move |_| theme.toggle()>
+                            <Icon name="sun" />
+                            "Light or dark"
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-sm" on:click=move |_| feedback(None)>
+                            <Icon name="heart" />
+                            "Send feedback"
+                        </button>
+                    </div>
+                    {body}
+                </section>
             </div>
+            {move || wizard.help.get().map(|h| view! {
+                <Modal open=wizard.help_open title=h.term>
+                    <div class="wizard-help">
+                        {h.text.iter().map(|p| view! { <p>{*p}</p> }).collect_view()}
+                        <p class="field-hint">{match HELP_CENTRE {
+                            Some(_) => "More in the Reelix help centre.",
+                            None => "More help: the Reelix help centre is not online yet, so there is no link here.",
+                        }}</p>
+                    </div>
+                </Modal>
+            })}
         </main>
     }
 }
 
-/// Default quality profile / root folder for movie and series requests. Only those two
-/// defaults are changed; every other request setting is written back as loaded.
+/// "What is…" links for the step, each opening its help in a dialog.
 #[component]
-fn DefaultProfiles(on_saved: Callback<()>) -> impl IntoView {
-    let settings = LocalResource::new(|| api::get::<RequestSettingsDto>("/settings/requests"));
+fn HelpLinks(wizard: Wizard, help: &'static [Help]) -> impl IntoView {
+    (!help.is_empty()).then(|| {
+        view! {
+            <ul class="wizard-help-links">
+                {help.iter().map(|h| view! {
+                    <li>
+                        <button type="button" class="link-button" on:click=move |_| { wizard.help.set(Some(h)); wizard.help_open.set(true); }>
+                            <Icon name="info" />
+                            {h.term}
+                        </button>
+                    </li>
+                }).collect_view()}
+            </ul>
+        }
+    })
+}
+
+/// A question as option cards: radio buttons, or check boxes when several answers are allowed.
+#[component]
+fn Choices(wizard: Wizard, question: &'static Question) -> impl IntoView {
+    let kind = if question.multi { "checkbox" } else { "radio" };
     view! {
-        {move || match settings.get() {
-            None => view! { <Skeleton lines=4 /> }.into_any(),
-            Some(Err(e)) => view! { <ErrorBox error=e on_retry=Callback::new(move |()| settings.refetch()) /> }.into_any(),
-            Some(Ok(s)) => view! { <DefaultProfilesForm initial=s on_saved=on_saved /> }.into_any(),
-        }}
+        <fieldset class="wizard-choices">
+            <legend>{question.legend}</legend>
+            <div class="choice-cards">
+                {move || question.choices.iter().filter(|c| install::offered(question, c.value, wizard.ctx.get())).map(|c| {
+                    let value = c.value;
+                    let checked = move || wizard.answers.with(|a| a.has(question.key, value));
+                    let on_change = move |e: ev::Event| {
+                        let on = event_target_checked(&e);
+                        wizard.answers.update(|a| {
+                            if question.multi {
+                                let picked: Vec<&str> = question
+                                    .choices
+                                    .iter()
+                                    .map(|c| c.value)
+                                    .filter(|v| if *v == value { on } else { a.has(question.key, v) })
+                                    .collect();
+                                a.set(question.key, picked.join(","));
+                            } else {
+                                a.set(question.key, value);
+                            }
+                        });
+                    };
+                    view! {
+                        <label class="choice-card" class:checked=checked>
+                            <input type=kind name=question.key value=value prop:checked=checked on:change=on_change />
+                            <span class="choice-text">
+                                <span class="choice-label">
+                                    {c.label}
+                                    {c.recommended.then(|| view! { <span class="choice-recommended">" (recommended)"</span> })}
+                                </span>
+                                <span class="choice-hint">{c.hint}</span>
+                            </span>
+                        </label>
+                    }
+                }).collect_view()}
+            </div>
+        </fieldset>
+    }
+}
+
+/// Providers the wizard suggests but does not set up, with placeholder links for now.
+#[component]
+fn Providers(intro: &'static str, list: &'static [Provider]) -> impl IntoView {
+    view! {
+        <div class="wizard-providers">
+            <p>{intro}</p>
+            <ul>
+                {list.iter().map(|p| view! {
+                    <li>
+                        <strong>{p.name}</strong>
+                        <span class="muted">{format!(", {}", p.note)}</span>
+                        {match p.link {
+                            Some(href) => view! { <a href=href target="_blank" rel="noreferrer">"Sign up (opens in a new tab)"</a> }.into_any(),
+                            None => view! { <span class="badge tone-neutral">"Link to come"</span> }.into_any(),
+                        }}
+                    </li>
+                }).collect_view()}
+            </ul>
+            <p class="field-hint">{PLACEHOLDER_NOTE}</p>
+        </div>
     }
 }
 
 #[component]
-fn DefaultProfilesForm(initial: RequestSettingsDto, on_saved: Callback<()>) -> impl IntoView {
-    let toasts = Toasts::expect();
-    let movie = RwSignal::new(initial.movie.clone());
-    let series = RwSignal::new(initial.series.clone());
-    let saving = RwSignal::new(false);
-    let initial = StoredValue::new(initial);
+fn StepBody(wizard: Wizard, id: StepId, code: RwSignal<String>) -> impl IntoView {
+    let s = install::step(id);
+    let questions = move || {
+        s.questions
+            .iter()
+            .filter(|q| wizard.answers.with(|a| q.asked(a)))
+            .map(|q| view! { <Choices wizard=wizard question=q /> })
+            .collect_view()
+    };
+    let extra = match id {
+        StepId::Code => view! {
+            <div class="field">
+                <label for="setup-token">"Set-up code"</label>
+                <p id="setup-token-hint" class="field-hint">"Printed in the server log when Reelix starts with no accounts."</p>
+                <input id="setup-token" class="input mono" type="text" autocomplete="off" autocapitalize="none"
+                    spellcheck="false" aria-describedby="setup-token-hint" data-snag-private=""
+                    prop:value=move || code.get() on:input=move |e| code.set(event_target_value(&e)) />
+            </div>
+        }
+        .into_any(),
+        StepId::Account => view! { <AccountFields /> }.into_any(),
+        StepId::Restore => view! {
+            <div class="field">
+                <label for="setup-backup">"Backup file"</label>
+                <p id="setup-backup-hint" class="field-hint">"Reelix makes these in System, then Backup. Their names start with reelix-backup."</p>
+                <input id="setup-backup" class="input" type="file" accept=".zip,application/zip" aria-describedby="setup-backup-hint" />
+            </div>
+        }
+        .into_any(),
+        StepId::Migrate => view! { <div class="wizard-content"><MigratePage /></div> }.into_any(),
+        StepId::Tmdb => view! { <TmdbFields wizard=wizard /> }.into_any(),
+        StepId::Folders => {
+            // The same folders the terminal wizard suggests, for what the person follows.
+            let suggest = wizard.answers.with_untracked(install::library_folders);
+            view! { <div class="wizard-content"><RootFoldersCard suggest=suggest /></div> }.into_any()
+        }
+        StepId::Torrent | StepId::Usenet => view! { <DownloadApp wizard=wizard id=id /> }.into_any(),
+        StepId::Sites => view! {
+            <div class="wizard-content">
+                <ProviderListCard kind=ProviderKind::Indexer title="Sites to search (Indexers)"
+                    description="Pick a site from the built-in list, or add a Torznab or Newznab address." />
+            </div>
+        }
+        .into_any(),
+        StepId::MediaServers => view! {
+            <div class="wizard-content">
+                <ProviderListCard kind=ProviderKind::MediaServer title="Media servers"
+                    description="Jellyfin, Emby or Plex. For Plex, use Sign in with Plex in the form." />
+            </div>
+        }
+        .into_any(),
+        StepId::Finish => view! { <Summary wizard=wizard /> }.into_any(),
+        _ => ().into_any(),
+    };
+    view! {
+        {questions}
+        {extra}
+    }
+}
 
-    let save = move |e: ev::SubmitEvent| {
-        e.prevent_default();
-        if saving.get_untracked() {
+/// The torrent or Usenet step under its question: the providers it needs, then the app's form.
+#[component]
+fn DownloadApp(wizard: Wizard, id: StepId) -> impl IntoView {
+    let key = if id == StepId::Torrent {
+        "torrent"
+    } else {
+        "usenet"
+    };
+    let needs = move || {
+        install::download_needs(id, &wizard.answers.get())
+            .map(|(intro, list)| view! { <Providers intro=intro list=list /> })
+    };
+    // Redrawn only when the app changes, not on every answer.
+    let answer = Memo::new(move |_| wizard.answers.with(|a| a.get(key).to_owned()));
+    let form = move || {
+        let answer = answer.get();
+        install::download_client_for(&answer).map(|_| {
+            let name = install::step(id).questions[0]
+                .choice(&answer)
+                .map(|c| c.label)
+                .unwrap_or_default();
+            view! {
+                <div class="wizard-content">
+                    <ProviderListCard kind=ProviderKind::DownloadClient title="Download apps"
+                        description=format!("Choose Add download client, then {name}, and give its address and sign-in. Reelix tests the connection.") />
+                </div>
+            }
+        })
+    };
+    view! {
+        {needs}
+        {form}
+    }
+}
+
+/// The admin account's fields. Read on submit through their ids, so nothing typed is kept in
+/// the wizard's state (and Send feedback never sees it).
+#[component]
+fn AccountFields() -> impl IntoView {
+    view! {
+        <div class="form">
+            <div class="field">
+                <label for="setup-username">"Username"</label>
+                <p id="setup-username-hint" class="field-hint">"Letters, numbers, dots, dashes and underscores."</p>
+                <input id="setup-username" class="input" type="text" autocomplete="username" autocapitalize="none"
+                    spellcheck="false" maxlength="64" aria-describedby="setup-username-hint" data-snag-private="" />
+            </div>
+            <div class="field">
+                <label for="setup-password">"Password"</label>
+                <p id="setup-password-hint" class="field-hint">"At least 8 characters. A short sentence works well."</p>
+                <input id="setup-password" class="input" type="password" autocomplete="new-password" aria-describedby="setup-password-hint" />
+            </div>
+            <div class="field">
+                <label for="setup-confirm">"Enter the password again"</label>
+                <input id="setup-confirm" class="input" type="password" autocomplete="new-password" />
+            </div>
+        </div>
+    }
+}
+
+fn input_element(id: &str) -> Option<web_sys::HtmlInputElement> {
+    document()
+        .get_element_by_id(id)
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+}
+
+fn input_value(id: &str) -> String {
+    input_element(id).map(|i| i.value()).unwrap_or_default()
+}
+
+fn clear_input(id: &str) {
+    if let Some(i) = input_element(id) {
+        i.set_value("");
+    }
+}
+
+#[component]
+fn TmdbFields(wizard: Wizard) -> impl IntoView {
+    let result = RwSignal::new(None::<Result<String, String>>);
+    let test = move |_| {
+        let token = input_value("setup-tmdb").trim().to_owned();
+        if token.is_empty() {
+            wizard.fail("Enter the read access token first.");
             return;
         }
-        let mut body = initial.get_value();
-        body.movie = movie.get_untracked();
-        body.series = series.get_untracked();
-        saving.set(true);
         spawn_local(async move {
-            match api::put::<_, RequestSettingsDto>("/settings/requests", &body).await {
-                Ok(_) => {
-                    toasts.success("Defaults saved.");
-                    on_saved.run(());
-                }
-                Err(e) => toasts.error(format!("Could not save: {e}")),
+            let body = MetadataSettingsDto {
+                tmdb_read_token: Some(token),
+                ..MetadataSettingsDto::default()
+            };
+            match api::post::<_, TestResultDto>("/settings/metadata/test", &body).await {
+                Ok(r) if r.ok => result.set(Some(Ok("The token works.".into()))),
+                Ok(_) => result.set(Some(Err("TMDB did not accept the token. Copy it again.".into()))),
+                Err(e) => result.set(Some(Err(e.message))),
             }
-            saving.set(false);
         });
+    };
+    view! {
+        <ol class="wizard-list">
+            <li><a href="https://www.themoviedb.org/signup" target="_blank" rel="noreferrer">"Create a free TMDB account (opens in a new tab)"</a>"."</li>
+            <li>"Go to Settings, then API, and request a key for personal use."</li>
+            <li>"Copy the API Read Access Token, the longer of the two."</li>
+        </ol>
+        <div class="field">
+            <label for="setup-tmdb">"Read access token"</label>
+            <p id="setup-tmdb-hint" class="field-hint">"Reelix keeps it on this server."</p>
+            <input id="setup-tmdb" class="input mono" type="password" autocomplete="off" spellcheck="false" aria-describedby="setup-tmdb-hint" />
+        </div>
+        <div class="wizard-inline">
+            <button type="button" class="btn btn-secondary" on:click=test>"Test the token"</button>
+            <span role="status">
+                {move || result.get().map(|r| match r {
+                    Ok(m) => view! { <span class="badge tone-success">{m}</span> }.into_any(),
+                    Err(m) => view! { <span class="badge tone-danger">{m}</span> }.into_any(),
+                })}
+            </span>
+        </div>
+    }
+}
+
+/// What was set and what was skipped.
+#[component]
+fn Summary(wizard: Wizard) -> impl IntoView {
+    let rows = move || {
+        let answers = wizard.answers.get();
+        let skipped = wizard.skipped.get();
+        wizard
+            .shown()
+            .into_iter()
+            .filter(|id| !matches!(id, StepId::Start | StepId::Code | StepId::Finish))
+            .map(|id| {
+                let s = install::step(id);
+                let skipped = skipped.contains(&StepKey::of(id));
+                let said: Vec<&str> = s
+                    .questions
+                    .iter()
+                    .filter(|q| q.asked(&answers))
+                    .flat_map(|q| {
+                        answers
+                            .get(q.key)
+                            .split(',')
+                            .filter_map(|v| q.choice(v).map(|c| c.label))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                let text = if skipped {
+                    "You can do this later in Settings.".to_owned()
+                } else if said.is_empty() {
+                    "What you added is in Settings.".to_owned()
+                } else {
+                    said.join(", ")
+                };
+                let badge = if skipped {
+                    view! { <span class="badge tone-warning">"Skipped"</span> }.into_any()
+                } else if said.is_empty() {
+                    view! { <span class="badge tone-neutral">"Done"</span> }.into_any()
+                } else {
+                    view! { <span class="badge tone-success">"Set"</span> }.into_any()
+                };
+                view! {
+                    <tr>
+                        <th scope="row">{s.title}</th>
+                        <td>{badge}</td>
+                        <td>{text}</td>
+                    </tr>
+                }
+            })
+            .collect_view()
+    };
+    let restore = wizard.answers.with_untracked(|a| a.start() == Start::Restore);
+    if restore {
+        view! {
+            <div class="alert alert-info" role="status">
+                <Icon name="info" />
+                <div class="alert-body">
+                    <span>"The backup is ready to restore. Restart Reelix to finish: on the server, run docker restart reelix. Then sign in with an account from the backup."</span>
+                </div>
+            </div>
+        }
+        .into_any()
+    } else {
+        view! {
+            <div class="table-wrap">
+                <table class="table">
+                    <thead><tr><th scope="col">"Step"</th><th scope="col">"State"</th><th scope="col">"What you chose"</th></tr></thead>
+                    <tbody>{rows}</tbody>
+                </table>
+            </div>
+        }
+        .into_any()
+    }
+}
+
+#[component]
+fn StepActions(wizard: Wizard, id: StepId, code: RwSignal<String>) -> impl IntoView {
+    let auth = AuthState::expect();
+    let toasts = Toasts::expect();
+    let navigate = use_navigate();
+    let s = install::step(id);
+
+    let primary_label = match id {
+        StepId::Code | StepId::Migrate => "Continue",
+        StepId::Account => "Create account",
+        StepId::Restore => "Restore the backup",
+        StepId::Finish if wizard.answers.with_untracked(|a| a.start() == Start::Restore) => "Close",
+        StepId::Finish => "Go to the dashboard",
+        _ => "Save and continue",
+    };
+
+    let on_primary = move |_| {
+        if wizard.busy.get_untracked() {
+            return;
+        }
+        let answers = wizard.answers.get_untracked();
+        match id {
+            StepId::Account => {
+                let username = input_value("setup-username").trim().to_owned();
+                let password = input_value("setup-password");
+                if let Some(msg) = account_problem(&username, &password, &input_value("setup-confirm")) {
+                    wizard.fail(msg);
+                    return;
+                }
+                let req = SetupRequest {
+                    username,
+                    password,
+                    email: None,
+                    setup_token: Some(code.get_untracked().trim().to_owned()).filter(|t| !t.is_empty()),
+                };
+                wizard.busy.set(true);
+                spawn_local(async move {
+                    match api::post::<_, UserDto>("/setup", &req).await {
+                        Ok(user) => {
+                            toasts.success(format!("Admin account {} created.", user.username));
+                            auth.sign_in(user);
+                            clear_input("setup-password");
+                            clear_input("setup-confirm");
+                            wizard.floor.set(Some(StepId::Account));
+                            wizard.busy.set(false);
+                            wizard.done();
+                        }
+                        Err(e) if e.status == 403 => {
+                            wizard.go(StepId::Code);
+                            wizard.fail("The set-up code is not right. Copy it again from the installer's output, or run docker logs reelix on the server.");
+                        }
+                        Err(e) if e.status == 409 => {
+                            wizard.fail("Reelix is already set up on this server. Sign in instead.")
+                        }
+                        Err(e) => wizard.fail(e.message),
+                    }
+                });
+            }
+            StepId::Restore => {
+                let Some(file) = input_element("setup-backup")
+                    .and_then(|i| i.files())
+                    .and_then(|f| f.get(0))
+                else {
+                    wizard.fail("Choose a backup file first.");
+                    return;
+                };
+                let token = code.get_untracked().trim().to_owned();
+                wizard.busy.set(true);
+                spawn_local(async move {
+                    let headers: Vec<(&str, &str)> = if token.is_empty() {
+                        vec![]
+                    } else {
+                        vec![("x-reelix-setup-token", token.as_str())]
+                    };
+                    match api::post_file_with::<PendingRestoreDto>("/setup/restore", &file, &headers).await {
+                        Ok(_) => {
+                            wizard.floor.set(Some(StepId::Restore));
+                            wizard.busy.set(false);
+                            wizard.done();
+                        }
+                        Err(e) if e.status == 403 => {
+                            wizard.go(StepId::Code);
+                            wizard.fail(
+                                "The set-up code is not right. Copy it again from the installer's output.",
+                            );
+                        }
+                        Err(e) => wizard.fail(format!("The backup could not be restored: {}", e.message)),
+                    }
+                });
+            }
+            StepId::Tmdb => {
+                let token = input_value("setup-tmdb").trim().to_owned();
+                if token.is_empty() {
+                    wizard.fail("Enter the read access token, or choose Skip this step.");
+                    return;
+                }
+                save_then_next(wizard, async move {
+                    let mut m = api::get::<MetadataSettingsDto>("/settings/metadata").await?;
+                    m.tmdb_read_token = Some(token);
+                    api::put::<_, MetadataSettingsDto>("/settings/metadata", &m).await?;
+                    clear_input("setup-tmdb");
+                    Ok(())
+                });
+            }
+            StepId::DownloadOptions => {
+                let prefer = if answers.get("prefer") == "torrent" {
+                    Protocol::Torrent
+                } else {
+                    Protocol::Usenet
+                };
+                save_then_next(wizard, async move {
+                    let profiles = api::get::<Vec<DelayProfile>>("/delayprofiles").await?;
+                    // The profile with no tags is the default every title uses.
+                    if let Some(mut p) = profiles.into_iter().find(|p| p.tags.is_empty()) {
+                        p.preferred_protocol = prefer;
+                        api::put::<_, DelayProfile>(&format!("/delayprofiles/{}", p.id), &p).await?;
+                    }
+                    Ok(())
+                });
+            }
+            StepId::Quality => {
+                let name = install::quality_profile_for(answers.get("quality"));
+                save_then_next(wizard, async move {
+                    let profiles = api::get::<Vec<QualityProfile>>("/qualityprofiles").await?;
+                    let id = profiles.iter().find(|p| p.name == name).map(|p| p.id);
+                    let mut r = api::get::<RequestSettingsDto>("/settings/requests").await?;
+                    r.movie.profile_id = id;
+                    r.series.profile_id = id;
+                    api::put::<_, RequestSettingsDto>("/settings/requests", &r).await?;
+                    Ok(())
+                });
+            }
+            StepId::Monitor => {
+                let when = install::minimum_availability_for(answers.get("movie_when"));
+                save_then_next(wizard, async move {
+                    let mut r = api::get::<RequestSettingsDto>("/settings/requests").await?;
+                    r.minimum_availability = when.to_owned();
+                    api::put::<_, RequestSettingsDto>("/settings/requests", &r).await?;
+                    Ok(())
+                });
+            }
+            StepId::Requests => {
+                let auto = answers.get("requests") == "auto";
+                save_then_next(wizard, async move {
+                    let mut r = api::get::<RequestSettingsDto>("/settings/requests").await?;
+                    r.auto_approve_movie = auto;
+                    r.auto_approve_series = auto;
+                    api::put::<_, RequestSettingsDto>("/settings/requests", &r).await?;
+                    Ok(())
+                });
+            }
+            StepId::Finish => {
+                if answers.start() == Start::Restore {
+                    toasts.info("Restart Reelix to finish restoring.");
+                } else {
+                    navigate("/", Default::default());
+                }
+            }
+            _ => wizard.done(),
+        }
     };
 
     view! {
-        <Card title="Request defaults" subtitle="“Library default” uses the first quality profile.">
-            <form id="setup-defaults" class="form" on:submit=save>
-                <DefaultsEditor label="Movies" kind="movie" is_4k=false value=movie />
-                <DefaultsEditor label="Series" kind="series" is_4k=false value=series />
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary" disabled=move || saving.get()>
-                        {move || if saving.get() { "Saving…" } else { "Save and continue" }}
-                    </button>
-                </div>
-            </form>
-        </Card>
+        <div class="wizard-actions">
+            {move || match wizard.back_target() {
+                Some(b) => view! { <button type="button" class="btn btn-ghost" on:click=move |_| wizard.go(b)>"Back"</button> }.into_any(),
+                None => view! { <span></span> }.into_any(),
+            }}
+            <div class="wizard-actions-end">
+                {s.optional.then(|| view! {
+                    <button type="button" class="btn btn-ghost" on:click=move |_| wizard.skip()>"Skip this step"</button>
+                })}
+                <button type="button" class="btn btn-primary btn-lg" disabled=move || wizard.busy.get() on:click=on_primary>
+                    {move || if wizard.busy.get() { "Saving" } else { primary_label }}
+                    {(id != StepId::Finish).then(|| view! { <Icon name="chevron" /> })}
+                </button>
+            </div>
+        </div>
+    }
+}
+
+/// Runs `save`, then moves on; an error stays on the step, beside a Report this problem button.
+fn save_then_next(wizard: Wizard, save: impl std::future::Future<Output = api::ApiResult<()>> + 'static) {
+    wizard.busy.set(true);
+    spawn_local(async move {
+        match save.await {
+            Ok(()) => {
+                wizard.busy.set(false);
+                wizard.done();
+            }
+            Err(e) => wizard.fail(format!("Reelix could not save this step: {}", e.message)),
+        }
+    });
+}
+
+/// The account form's first problem, or `None` when it can be sent.
+fn account_problem(username: &str, password: &str, confirm: &str) -> Option<&'static str> {
+    if username.is_empty() || username.chars().count() > 64 {
+        Some("Enter a username of 1 to 64 characters.")
+    } else if !username
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        Some("A username can only have letters, numbers, dots, dashes and underscores.")
+    } else if password.chars().count() < 8 {
+        Some("The password needs at least 8 characters.")
+    } else if password != confirm {
+        Some("The passwords are different. Enter it again.")
+    } else {
+        None
     }
 }

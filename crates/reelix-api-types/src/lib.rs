@@ -5,6 +5,7 @@
 
 pub mod books;
 pub mod content;
+pub mod install;
 pub mod integrations;
 pub mod library;
 pub mod migrate;

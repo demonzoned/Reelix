@@ -163,8 +163,21 @@ pub async fn put<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Api
 
 /// `POST {path}` with a file as the raw request body (e.g. a backup archive).
 pub async fn post_file<T: DeserializeOwned>(path: &str, file: &web_sys::File) -> ApiResult<T> {
+    post_file_with(path, file, &[]).await
+}
+
+/// [`post_file`] with extra request headers (the set-up code on `/setup/restore`).
+pub async fn post_file_with<T: DeserializeOwned>(
+    path: &str,
+    file: &web_sys::File,
+    headers: &[(&str, &str)],
+) -> ApiResult<T> {
     let content_type = Some(file.type_()).filter(|t| !t.is_empty());
-    let req = with_headers(Request::post(&api_url(path)))
+    let mut builder = with_headers(Request::post(&api_url(path)));
+    for (k, v) in headers {
+        builder = builder.header(k, v);
+    }
+    let req = builder
         .header(
             "content-type",
             content_type.as_deref().unwrap_or("application/octet-stream"),

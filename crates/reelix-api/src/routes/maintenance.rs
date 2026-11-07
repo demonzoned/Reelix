@@ -319,7 +319,19 @@ pub async fn restore_upload(
     // Checked before any of the body is read, so a non-admin can't make the server take in
     // gigabytes.
     user.require(Permissions::ADMIN)?;
-    let backend = backend(&state)?;
+    let pending = stage_upload(&state, &headers, body).await?;
+    tracing::warn!(by = %user.user.username, "restore staged from an uploaded backup; it is applied on the next restart");
+    Ok((StatusCode::ACCEPTED, ApiJson(pending)).into_response())
+}
+
+/// Streams an uploaded backup archive into the backend under the [`MAX_BACKUP_UPLOAD`] cap and
+/// stages it for the next restart. The caller checks who may do this first.
+pub(crate) async fn stage_upload(
+    state: &AppState,
+    headers: &HeaderMap,
+    body: Body,
+) -> ApiResult<PendingRestoreDto> {
+    let backend = backend(state)?;
     let declared = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
@@ -339,9 +351,7 @@ pub async fn restore_upload(
         }
         Ok(chunk)
     });
-    let pending = backend.stage_restore_upload(stream.boxed()).await?;
-    tracing::warn!(by = %user.user.username, "restore staged from an uploaded backup; it is applied on the next restart");
-    Ok((StatusCode::ACCEPTED, ApiJson(pending)).into_response())
+    backend.stage_restore_upload(stream.boxed()).await
 }
 
 /// The 413 for an upload over [`MAX_BACKUP_UPLOAD`].

@@ -4,6 +4,7 @@ use leptos::ev;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use reelix_api_types::content::{ContentKind, ContentRootFolderDto, CreateContentRootFolderRequest};
+use reelix_api_types::install;
 use reelix_api_types::library::{
     CreateRootFolderRequest, ImportMode, MediaKind, MediaManagementSettings, RescanAfterRefresh,
     RootFolderDto,
@@ -82,10 +83,6 @@ const ROOT_KINDS: [(RootKind, &str, &str, &str); 6] = [
 impl RootKind {
     fn label(self) -> &'static str {
         ROOT_KINDS.iter().find(|k| k.0 == self).map_or("", |k| k.2)
-    }
-
-    fn placeholder(self) -> &'static str {
-        ROOT_KINDS.iter().find(|k| k.0 == self).map_or("", |k| k.3)
     }
 
     /// API collection for this kind's root folders.
@@ -180,13 +177,36 @@ async fn load_roots() -> Result<Vec<Root>, api::ApiError> {
     Ok(roots)
 }
 
+/// The root folders list and its Add form. Settings shows every kind. The set-up wizard passes
+/// `suggest`, the folders for what the person follows ([`install::library_folders`]), the same
+/// list the terminal wizard offers: then only those kinds can be chosen, and each one's path is
+/// filled in.
 #[component]
-pub fn RootFoldersCard() -> impl IntoView {
+pub fn RootFoldersCard(#[prop(optional)] suggest: Option<Vec<install::LibraryFolder>>) -> impl IntoView {
     let toasts = Toasts::expect();
     let roots = LocalResource::new(load_roots);
     on_entity_changed(&["root_folder", "rootfolder"], false, move || roots.refetch());
-    let path = RwSignal::new(String::new());
-    let kind = RwSignal::new(RootKind::Movie);
+    let wizard = suggest.is_some();
+    let kinds: Vec<(RootKind, &'static str, &'static str, &'static str)> = match &suggest {
+        Some(list) => list
+            .iter()
+            .filter_map(|f| {
+                ROOT_KINDS
+                    .iter()
+                    .find(|k| k.1 == f.key)
+                    .map(|k| (k.0, k.1, f.label, f.path))
+            })
+            .collect(),
+        None => ROOT_KINDS.to_vec(),
+    };
+    let first = kinds.first().copied();
+    let path = RwSignal::new(if wizard {
+        first.map(|k| k.3.to_string()).unwrap_or_default()
+    } else {
+        String::new()
+    });
+    let kind = RwSignal::new(first.map_or(RootKind::Movie, |k| k.0));
+    let kinds = StoredValue::new(kinds);
     let busy = RwSignal::new(false);
     let delete_target = RwSignal::new(None::<Root>);
     let delete_open = RwSignal::new(false);
@@ -231,11 +251,19 @@ pub fn RootFoldersCard() -> impl IntoView {
             };
             match res {
                 Ok(p) => {
-                    toasts.success(format!("Added root folder {p}."));
+                    toasts.success(if wizard {
+                        format!("Added the folder {p}.")
+                    } else {
+                        format!("Added root folder {p}.")
+                    });
                     path.set(String::new());
                     roots.refetch();
                 }
-                Err(e) => toasts.error(format!("Could not add the root folder: {e}")),
+                Err(e) => toasts.error(if wizard {
+                    format!("Could not add the folder: {e}")
+                } else {
+                    format!("Could not add the root folder: {e}")
+                }),
             }
             busy.set(false);
         });
@@ -315,24 +343,31 @@ pub fn RootFoldersCard() -> impl IntoView {
     };
 
     view! {
-        <Card title="Root folders" subtitle="Top-level folders for every library. Folders of different libraries may not overlap.">
+        <Card title=if wizard { "Library folders" } else { "Root folders" }
+            subtitle=if wizard { "As Reelix sees them, inside /data. Folders of different libraries may not overlap." }
+                else { "Top-level folders for every library. Folders of different libraries may not overlap." }>
             {list}
             <form class="lib-toolbar root-add" on:submit=add>
-                <input class="input grow mono" type="text" placeholder=move || kind.get().placeholder() aria-label="Root folder path" required
+                <input class="input grow mono" type="text" aria-label=if wizard { "Folder path" } else { "Root folder path" } required
+                    placeholder=move || { let k = kind.get(); kinds.with_value(|l| l.iter().find(|x| x.0 == k).map_or("", |x| x.3)) }
                     prop:value=move || path.get() on:input=move |e| path.set(event_target_value(&e)) />
                 <select class="input" aria-label="Media type" on:change=move |e| {
                     let v = event_target_value(&e);
-                    if let Some(k) = ROOT_KINDS.iter().find(|k| k.1 == v) {
+                    if let Some(k) = kinds.with_value(|l| l.iter().find(|k| k.1 == v).copied()) {
+                        // In the wizard, the suggested path for the kind chosen, unless something else is typed.
+                        if wizard && kinds.with_value(|l| path.with_untracked(|p| p.is_empty() || l.iter().any(|x| x.3 == p))) {
+                            path.set(k.3.to_string());
+                        }
                         kind.set(k.0);
                     }
                 }>
-                    {ROOT_KINDS.iter().map(|&(k, value, label, _)| view! {
+                    {kinds.get_value().into_iter().map(|(k, value, label, _)| view! {
                         <option value=value selected=move || kind.get() == k>{label}</option>
                     }).collect_view()}
                 </select>
                 <button type="submit" class="btn btn-primary" disabled=move || busy.get()>
                     <Icon name="plus" />
-                    "Add root folder"
+                    {if wizard { "Add folder" } else { "Add root folder" }}
                 </button>
             </form>
         </Card>

@@ -209,6 +209,7 @@ pub const NAV: &[&[NavItem]] = &[
                 ("Metadata", "/settings/metadata"),
                 ("Radio", "/settings/radio"),
                 ("Security", "/settings/security"),
+                ("Set-up Wizard", "/settings/wizard"),
             ],
         },
         // Admins reach Users through Settings; this entry is for non-admin user managers.

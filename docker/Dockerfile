@@ -26,7 +26,10 @@ COPY --from=planner /src/recipe.json recipe.json
 RUN cargo chef cook --release --locked --recipe-path recipe.json \
     --target wasm32-unknown-unknown --package reelix-web
 COPY . .
-RUN cd crates/reelix-web && trunk build --release
+# Onboarding: the set-up wizard by default; --build-arg REELIX_WEB_FEATURES=classic-setup builds
+# Reelix's classic onboarding instead.
+ARG REELIX_WEB_FEATURES=""
+RUN cd crates/reelix-web && trunk build --release ${REELIX_WEB_FEATURES:+--features "$REELIX_WEB_FEATURES"}
 
 # ---- Runtime -----------------------------------------------------------------
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime

@@ -12,6 +12,16 @@ When releasing, rename `Unreleased` to the version and date (`## [0.2.0] - 2026-
 - **Changing a provider's address no longer sends its saved password or API key to the new host.** Saving an indexer, download client or other connection with a new host or port now asks you to enter the secret again, as testing it already did (#23).
 
 ### Added
+- **A new setup wizard** with three ways to start: a new install, restoring a Reelix backup, or migrating from the *arr apps. Each answer is saved to the setting Reelix already has, and every step after the account can be skipped.
+  - **New install** asks what to follow, then the TMDB key, library folders, a torrent app and a Usenet app, which to prefer, sites to search, quality, when to get new movies, media servers and requests.
+  - **Restore** stages a backup before any account exists (`POST /api/v1/setup/restore`, behind the same setup token as `POST /api/v1/setup`).
+  - **Migration** brings the *arr apps over with the System → Migrate preview, inside the wizard.
+  - "What is…" help on each step, a progress line, and focus on each new step's heading.
+- **`reelix setup`:** the same wizard in a terminal, for a server with no desktop. Boxed (a screen per step, a progress bar and a menu on the bottom line, with help over the step) or plain (`--plain` or `REELIX_PLAIN=1`) for screen readers.
+- **Settings → Set-up Wizard** with **Launch wizard**: an admin can run the wizard again (without the account and restore steps), in the browser or with `reelix setup`.
+- **Classic onboarding as a build option:** build the web UI with `--features classic-setup` (or the Docker build argument `REELIX_WEB_FEATURES=classic-setup`) to keep the classic onboarding instead of the set-up wizard.
+- **Terminal-only instructions** in `docs/terminal-setup.md`: every command from installing Reelix to the last set-up question.
+- **Send feedback in the wizard,** with [Snaglist](https://github.com/TheMightyTRex/snaglist) (MIT). Reports name the step and open a GitHub issue. **Show as a QR code** sends a report from a phone when the server is not online yet; in the terminal the code is sized to the window, and the whole report is saved under the data directory's `feedback` folder.
 - **Radio: popular shows on each BBC station.** Discover's Radio tab has a row for Radio 4, Radio 4 Extra, Radio 2, Radio 5 Live and the World Service, next to Popular on BBC Sounds (UK only, like the other BBC rows).
 - **Radio: 32 BBC Sounds categories, up from 7**, under four headings: Comedy, Drama, Factual, and Sport and music. They include sub-genres such as Science fiction and fantasy, Sitcoms, Panel games and quizzes, and Thrillers.
 
