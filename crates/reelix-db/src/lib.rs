@@ -98,7 +98,7 @@ impl Db {
         }
         // An earlier start found that this file system cannot share memory: go straight to the
         // rollback journal, rather than set WAL and turn it back (rewriting the file) every start.
-        let marker = no_wal_marker(&file);
+        let marker = no_wal_marker(file);
         if marker.exists() {
             tracing::warn!(
                 file = %file.display(),
