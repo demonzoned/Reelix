@@ -6,6 +6,9 @@ When releasing, rename `Unreleased` to the version and date (`## [0.2.0] - 2026-
 
 ## [Unreleased]
 
+### Fixed
+- **Migration: a profile name used by another kind no longer fails.** Quality profile names are unique across films and series, music and books, so migrating Lidarr after Radarr failed on Lidarr's "Any" ("a quality profile named Any already exists") and skipped the artists using it. Such a profile is now created as "Any (Lidarr)", and the preview says so. When Reelix already has a profile of the same name and kind, the preview now says that Reelix's own is used and the app's changes to it aren't copied.
+
 ## [0.8.6] - 2026-11-06
 
 ### Security
