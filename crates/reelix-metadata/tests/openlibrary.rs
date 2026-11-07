@@ -209,6 +209,14 @@ async fn author_works_are_paged() {
     assert_eq!(annotated.authors[1].id, "OL2631291A");
     assert_eq!(annotated.authors[1].name, "", "co-authors are ids only");
     assert_eq!(annotated.authors[1].role.as_deref(), Some("Editor"));
+    // Newer records link a series by key only: that entry is left out, the work still loads.
+    assert_eq!(
+        annotated.series,
+        [SeriesRef {
+            title: "Middle-earth".into(),
+            position: None
+        }]
+    );
 }
 
 #[tokio::test]

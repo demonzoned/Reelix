@@ -20,6 +20,34 @@ impl Text {
     }
 }
 
+/// A series entry: `"Name ; 3"`, or (newer records) `{"series": {"key": "/series/OL…L"}, "position": "3"}`,
+/// which names the series only by its key.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub(super) enum SeriesEntry {
+    Plain(String),
+    Linked {
+        #[allow(dead_code)]
+        series: Key,
+        #[allow(dead_code)]
+        #[serde(default)]
+        position: Option<serde_json::Value>,
+    },
+    /// Anything else (`null`, a number, an object of another shape): ignored, so one odd entry
+    /// does not make the whole work or edition unreadable.
+    Other(serde::de::IgnoredAny),
+}
+
+impl SeriesEntry {
+    /// The text form; linked entries carry no name, so they are left out for now.
+    pub(super) fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Plain(s) => Some(s),
+            Self::Linked { .. } | Self::Other(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub(super) struct Key {
@@ -121,7 +149,7 @@ pub(super) struct Work {
     pub first_publish_date: Option<String>,
     pub subjects: Vec<String>,
     pub covers: Vec<i64>,
-    pub series: Vec<String>,
+    pub series: Vec<SeriesEntry>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -146,7 +174,7 @@ pub(super) struct Edition {
     pub number_of_pages: Option<u32>,
     pub physical_format: Option<String>,
     pub covers: Vec<i64>,
-    pub series: Vec<String>,
+    pub series: Vec<SeriesEntry>,
     pub works: Vec<Key>,
     pub contributors: Vec<Contributor>,
     pub contributions: Vec<String>,
@@ -188,4 +216,28 @@ pub(super) struct Ratings {
 pub(super) struct RatingSummary {
     pub average: Option<f64>,
     pub count: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn odd_series_entries_do_not_spoil_the_work() {
+        let work: Work = serde_json::from_value(serde_json::json!({
+            "key": "/works/OL1W",
+            "title": "A book",
+            "series": [null, 3, {"name": "no key"}, "Discworld ; 1", {"series": {"key": "/series/OL1L"}}]
+        }))
+        .unwrap();
+        assert_eq!(work.series.len(), 5);
+        let texts: Vec<_> = work.series.iter().filter_map(SeriesEntry::as_text).collect();
+        assert_eq!(texts, ["Discworld ; 1"]);
+        let edition: Edition = serde_json::from_value(serde_json::json!({
+            "key": "/books/OL1M",
+            "series": [null]
+        }))
+        .unwrap();
+        assert_eq!(edition.series.len(), 1);
+    }
 }

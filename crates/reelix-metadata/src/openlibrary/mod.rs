@@ -303,7 +303,11 @@ impl OpenLibrary {
             first_publish_year: year_of(first),
             subjects: w.subjects,
             cover_url: self.cover(&w.covers),
-            series: w.series.iter().filter_map(|s| parse_series(s)).collect(),
+            series: w
+                .series
+                .iter()
+                .filter_map(|s| s.as_text().and_then(parse_series))
+                .collect(),
             rating: None,
             rating_count: None,
         }
@@ -353,7 +357,11 @@ impl OpenLibrary {
             physical_format: nonempty(e.physical_format),
             is_audiobook,
             cover_url: self.cover(&e.covers),
-            series: e.series.iter().filter_map(|s| parse_series(s)).collect(),
+            series: e
+                .series
+                .iter()
+                .filter_map(|s| s.as_text().and_then(parse_series))
+                .collect(),
             narrators,
         }
     }
