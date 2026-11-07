@@ -33,6 +33,9 @@ pub(super) enum SeriesEntry {
         #[serde(default)]
         position: Option<serde_json::Value>,
     },
+    /// Anything else (`null`, a number, an object of another shape): ignored, so one odd entry
+    /// does not make the whole work or edition unreadable.
+    Other(serde::de::IgnoredAny),
 }
 
 impl SeriesEntry {
@@ -40,7 +43,7 @@ impl SeriesEntry {
     pub(super) fn as_text(&self) -> Option<&str> {
         match self {
             Self::Plain(s) => Some(s),
-            Self::Linked { .. } => None,
+            Self::Linked { .. } | Self::Other(_) => None,
         }
     }
 }
@@ -213,4 +216,28 @@ pub(super) struct Ratings {
 pub(super) struct RatingSummary {
     pub average: Option<f64>,
     pub count: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn odd_series_entries_do_not_spoil_the_work() {
+        let work: Work = serde_json::from_value(serde_json::json!({
+            "key": "/works/OL1W",
+            "title": "A book",
+            "series": [null, 3, {"name": "no key"}, "Discworld ; 1", {"series": {"key": "/series/OL1L"}}]
+        }))
+        .unwrap();
+        assert_eq!(work.series.len(), 5);
+        let texts: Vec<_> = work.series.iter().filter_map(SeriesEntry::as_text).collect();
+        assert_eq!(texts, ["Discworld ; 1"]);
+        let edition: Edition = serde_json::from_value(serde_json::json!({
+            "key": "/books/OL1M",
+            "series": [null]
+        }))
+        .unwrap();
+        assert_eq!(edition.series.len(), 1);
+    }
 }
