@@ -74,6 +74,53 @@ impl MetadataSource for Tmdb {
     }
 }
 
+/// Open data (Wikidata and TVmaze), used when no TMDB key is set. Collections are TMDB's own.
+#[async_trait]
+impl MetadataSource for reelix_metadata::OpenData {
+    async fn movie(&self, tmdb_id: u32) -> Result<MovieMetadata, MetaError> {
+        reelix_metadata::OpenData::movie(self, tmdb_id).await
+    }
+
+    async fn series(&self, id: SeriesExternalId) -> Result<SeriesMetadata, MetaError> {
+        reelix_metadata::OpenData::series(self, id).await
+    }
+
+    async fn collection(&self, _tmdb_id: u32) -> Result<CollectionMetadata, MetaError> {
+        Err(MetaError::Unsupported("collections need TMDB"))
+    }
+
+    async fn search(
+        &self,
+        query: &str,
+        kind: MediaKind,
+        year: Option<i32>,
+    ) -> Result<Vec<SearchHit>, MetaError> {
+        match kind {
+            MediaKind::Movie => self.search_movies(query, year).await,
+            MediaKind::Series => self.search_series(query, year).await,
+        }
+    }
+
+    async fn find(
+        &self,
+        source: ExternalSource,
+        id: &str,
+        kind: MediaKind,
+    ) -> Result<Vec<SearchHit>, MetaError> {
+        match (kind, source) {
+            (MediaKind::Movie, ExternalSource::Imdb) => self.find_movie_by_imdb(id).await,
+            (MediaKind::Movie, ExternalSource::Tvdb) => Ok(Vec::new()),
+            (MediaKind::Series, ExternalSource::Imdb) => {
+                self.find_series(SeriesExternalId::Imdb(id.into())).await
+            }
+            (MediaKind::Series, ExternalSource::Tvdb) => match id.trim().parse() {
+                Ok(t) => self.find_series(SeriesExternalId::Tvdb(t)).await,
+                Err(_) => Ok(Vec::new()),
+            },
+        }
+    }
+}
+
 type ResolveFut = Pin<Box<dyn Future<Output = Result<Arc<dyn MetadataSource>, MetaError>> + Send>>;
 
 /// A source resolved on every call, so configuration changes (API key set later) apply

@@ -355,6 +355,45 @@ pub fn write_default_config_if_missing(path: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
+/// Whether a metadata base URL is plain `http://` to another computer. The TMDB v3 key travels in
+/// the address (`?api_key=`), so it would cross the network in clear text and land in proxy logs.
+pub fn plain_http_to_another_computer(url: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if u.scheme() != "http" {
+        return false;
+    }
+    let Some(host) = u.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let ip = host.trim_start_matches('[').trim_end_matches(']');
+    !(host == "localhost"
+        || host.ends_with(".localhost")
+        || ip.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()))
+}
+
+impl Config {
+    /// Warns about each metadata base URL that sends keys in clear text to another computer.
+    pub fn warn_about_plain_http_metadata(&self) {
+        for (name, url) in [
+            ("metadata.tmdb_base_url", &self.tmdb_base_url),
+            ("metadata.tvdb_base_url", &self.tvdb_base_url),
+        ] {
+            if let Some(u) = url
+                && plain_http_to_another_computer(u)
+            {
+                tracing::warn!(
+                    setting = name,
+                    "{name} uses plain http to another computer, so API keys cross the network \
+                     unencrypted; use https, or a proxy on this computer"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 // `figment::Jail` closures must return the (large) `figment::Result`.
 #[allow(clippy::result_large_err)]
@@ -364,6 +403,16 @@ mod tests {
 
     fn load(cli: &CliOverrides) -> figment::Result<Config> {
         Config::load(cli).map_err(|e| *e)
+    }
+
+    #[test]
+    fn plain_http_metadata_to_another_computer_is_noticed() {
+        assert!(plain_http_to_another_computer("http://mirror:8000/3"));
+        assert!(plain_http_to_another_computer("http://192.168.1.5/3"));
+        assert!(!plain_http_to_another_computer("https://mirror/3"));
+        assert!(!plain_http_to_another_computer("http://localhost:8000/3"));
+        assert!(!plain_http_to_another_computer("http://127.0.0.1:8000/3"));
+        assert!(!plain_http_to_another_computer("http://[::1]:8000/3"));
     }
 
     #[test]

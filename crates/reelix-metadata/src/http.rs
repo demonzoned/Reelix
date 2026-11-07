@@ -128,6 +128,8 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 #[derive(Debug)]
 pub struct TtlCache {
     max_entries: usize,
+    /// Most bytes of JSON text held in all; `usize::MAX` for no limit.
+    max_bytes: usize,
     entries: Arc<Entries>,
 }
 
@@ -147,7 +149,18 @@ impl TtlCache {
                 }
             });
         }
-        Self { max_entries, entries }
+        Self {
+            max_entries,
+            max_bytes: usize::MAX,
+            entries,
+        }
+    }
+
+    /// Also limits the cache to `max_bytes` of JSON text in all. One answer larger than an
+    /// eighth of that is not cached at all, so it cannot push out everything else.
+    pub fn with_max_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_bytes = max_bytes;
+        self
     }
 
     pub fn get(&self, key: &str) -> Option<Arc<Value>> {
@@ -175,10 +188,34 @@ impl TtlCache {
         let Ok(text) = serde_json::to_string(&*value) else {
             return;
         };
+        if self.max_bytes != usize::MAX && text.len() > self.max_bytes / 8 {
+            return;
+        }
         let now = Instant::now();
         let mut map = lock(&self.entries);
         if map.len() >= self.max_entries {
             map.retain(|_, (exp, _)| *exp > now);
+        }
+        if self.max_bytes != usize::MAX {
+            map.remove(&key);
+            let mut held: usize = map.values().map(|(_, t)| t.len()).sum();
+            if held + text.len() > self.max_bytes {
+                map.retain(|_, (exp, _)| *exp > now);
+                held = map.values().map(|(_, t)| t.len()).sum();
+            }
+            // Over the limit: drop the entries closest to expiry until the new one fits.
+            while held + text.len() > self.max_bytes {
+                let Some(k) = map
+                    .iter()
+                    .min_by_key(|(_, (exp, _))| *exp)
+                    .map(|(k, _)| k.clone())
+                else {
+                    break;
+                };
+                if let Some((_, t)) = map.remove(&k) {
+                    held -= t.len();
+                }
+            }
         }
         if map.len() >= self.max_entries {
             // Still full: drop the entry closest to expiry.
@@ -258,6 +295,28 @@ mod tests {
         assert!(c.get("a").is_none(), "closest-to-expiry entry evicted");
         tokio::time::advance(Duration::from_secs(51)).await;
         assert!(c.get("b").is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cache_keeps_to_its_byte_limit() {
+        let c = TtlCache::new(100).with_max_bytes(80);
+        let ten = || Arc::new(Value::from("12345678")); // 10 bytes of JSON text
+        c.insert("a".into(), ten(), Duration::from_secs(10));
+        c.insert("b".into(), ten(), Duration::from_secs(20));
+        assert_eq!(c.len(), 2);
+        // Larger than an eighth of the limit: not cached.
+        c.insert(
+            "big".into(),
+            Arc::new(Value::from("x".repeat(20))),
+            Duration::from_secs(30),
+        );
+        assert!(c.get("big").is_none());
+        for i in 0..8 {
+            c.insert(format!("k{i}"), ten(), Duration::from_secs(30 + i));
+        }
+        assert_eq!(c.len(), 8, "80 bytes hold eight 10-byte answers");
+        assert!(c.get("a").is_none(), "closest-to-expiry entry evicted first");
+        assert!(c.get("k7").is_some());
     }
 
     #[tokio::test(start_paused = true)]
