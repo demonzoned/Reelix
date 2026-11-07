@@ -324,7 +324,14 @@ impl<'a> Engine<'a> {
                 slot.insert(repo.list_family(family).await.map_err(err)?);
             }
             let existing = &existing_by_family[&family];
-            if let Some(e) = existing.iter().find(|e| e.name.eq_ignore_ascii_case(&p.name)) {
+            // The profile itself, or the one an earlier run made under the app's name because
+            // another kind had the name: "Any (Lidarr)", or "Any (Lidarr) 2" when that was taken too.
+            let renamed = renamed_profile(&p.name, kind.label());
+            let found = existing
+                .iter()
+                .find(|e| e.name.eq_ignore_ascii_case(&p.name))
+                .or_else(|| existing.iter().find(|e| is_renamed(&e.name, &renamed)));
+            if let Some(e) = found {
                 self.profiles.insert(p.id, e.id);
                 self.push(
                     key,
@@ -351,14 +358,22 @@ impl<'a> Engine<'a> {
             let mut detail = Vec::new();
             // Profile names are unique across every kind (films and series, music, books): a
             // music profile "Any" from Lidarr can't share the name of Radarr's "Any".
-            let taken = repo
+            let names: Vec<String> = repo
                 .list_all()
                 .await
                 .map_err(err)?
-                .iter()
-                .any(|e| e.name.eq_ignore_ascii_case(&profile.name));
-            if taken {
-                profile.name = format!("{} ({})", p.name, kind.label());
+                .into_iter()
+                .map(|e| e.name)
+                .collect();
+            let taken = |name: &str| names.iter().any(|n| n.eq_ignore_ascii_case(name));
+            if taken(&profile.name) {
+                // The new name may be taken as well: count up until one is free.
+                profile.name = renamed.clone();
+                let mut n = 2;
+                while taken(&profile.name) {
+                    profile.name = format!("{renamed} {n}");
+                    n += 1;
+                }
                 detail.push(format!(
                     "named \"{}\": a profile of another kind already uses \"{}\"",
                     profile.name, p.name
@@ -1890,9 +1905,37 @@ pub(crate) fn seerr_permissions(bits: u64) -> Permissions {
     if p.is_empty() { Permissions::ROLE_USER } else { p }
 }
 
+/// The name a profile gets when another kind already uses its own: "Any (Lidarr)".
+fn renamed_profile(name: &str, app: &str) -> String {
+    format!("{name} ({app})")
+}
+
+/// Whether `name` is `renamed`, or `renamed` with a number after it ("Any (Lidarr) 2").
+fn is_renamed(name: &str, renamed: &str) -> bool {
+    if name.eq_ignore_ascii_case(renamed) {
+        return true;
+    }
+    name.get(..renamed.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(renamed))
+        && name[renamed.len()..]
+            .strip_prefix(' ')
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renamed_profiles_are_recognised() {
+        let r = renamed_profile("Any", "Lidarr");
+        assert_eq!(r, "Any (Lidarr)");
+        assert!(is_renamed("Any (Lidarr)", &r));
+        assert!(is_renamed("any (lidarr) 3", &r));
+        assert!(!is_renamed("Any (Lidarr) x", &r));
+        assert!(!is_renamed("Any (Lidarr) ", &r));
+        assert!(!is_renamed("Any", &r));
+    }
 
     #[test]
     fn detects_prowlarr_proxies() {

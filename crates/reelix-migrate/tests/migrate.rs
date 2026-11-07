@@ -572,6 +572,60 @@ async fn a_profile_name_used_by_another_kind_gets_the_apps_name() {
 }
 
 #[tokio::test]
+async fn a_renamed_profile_avoids_a_second_clash_and_is_found_again() {
+    // "My HD" and "My HD (Radarr)" are both taken by profiles of other kinds, so Radarr's profile
+    // becomes "My HD (Radarr) 2"; a second run finds it under that name instead of making another.
+    let env = env().await;
+    let repo = env.db.quality_profiles();
+    let others: Vec<_> = repo
+        .list_all()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.family != reelix_parser::QualityFamily::Video)
+        .collect();
+    assert!(others.len() >= 2, "two seeded profiles of other kinds");
+    for (p, name) in others.iter().zip(["My HD", "My HD (Radarr)"]) {
+        let mut renamed = p.clone();
+        renamed.name = name.into();
+        repo.update(p.id, &renamed).await.unwrap();
+    }
+
+    let server = radarr(&env).await;
+    for round in 0..2 {
+        let conn = connection(&env, SourceKind::Radarr, &server);
+        env.svc
+            .start(MigrateRunRequest {
+                connection: conn,
+                categories: vec![MigrateCategory::QualityProfile],
+                search_missing: false,
+            })
+            .unwrap();
+        let run = wait(&env.svc).await;
+        let item = find(&run.items, "quality_profile:4");
+        let want = if round == 0 {
+            MigrateAction::Create
+        } else {
+            MigrateAction::Existing
+        };
+        assert_eq!(item.action, want, "round {round}: {item:?}");
+    }
+    let names: Vec<String> = repo
+        .list_all()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(
+        names.iter().filter(|n| n.starts_with("My HD (Radarr)")).count(),
+        2,
+        "{names:?}"
+    );
+    assert!(names.iter().any(|n| n == "My HD (Radarr) 2"), "{names:?}");
+}
+
+#[tokio::test]
 async fn sonarr_after_radarr_shares_the_download_client() {
     let env = env().await;
     let r = radarr(&env).await;
