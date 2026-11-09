@@ -341,3 +341,45 @@ async fn items_include_the_book_category() {
     );
     assert_eq!(c.items().await.unwrap().len(), 5);
 }
+
+/// qBittorrent 5.1 and later: the login answers 204 with no text and a cookie named QBT_SID_<port>.
+#[tokio::test]
+async fn signs_in_to_qbittorrent_5_1_with_its_port_named_cookie() {
+    const NEW_SID: &str = "QBT_SID_8080=0aBcD1eFg2HiJ3kLm4NoP5qRs6TuV7wX";
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v2/auth/login"))
+        .and(body_string_contains("password=adminadmin"))
+        .respond_with(ResponseTemplate::new(204).insert_header(
+            "set-cookie",
+            format!("{NEW_SID}; HttpOnly; SameSite=Lax; path=/").as_str(),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v2/app/webapiVersion"))
+        .and(header("cookie", NEW_SID))
+        .respond_with(ResponseTemplate::new(200).set_body_string("2.11.4"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v2/app/version"))
+        .and(header("cookie", NEW_SID))
+        .respond_with(ResponseTemplate::new(200).set_body_string("v5.1.2"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v2/app/preferences"))
+        .and(header("cookie", NEW_SID))
+        .respond_with(json_fixture("qbittorrent/preferences.json"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v2/torrents/categories"))
+        .and(header("cookie", NEW_SID))
+        .respond_with(json_fixture("qbittorrent/categories.json"))
+        .mount(&server)
+        .await;
+    let c = client(&server);
+    c.test().await.expect("qBittorrent 5.1 sign-in works");
+}

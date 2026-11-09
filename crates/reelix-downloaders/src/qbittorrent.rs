@@ -271,17 +271,16 @@ impl QBittorrent {
             .send()
             .await?;
         let status = resp.status();
-        let cookie = resp
+        let cookies: Vec<String> = resp
             .headers()
             .get_all(reqwest::header::SET_COOKIE)
             .iter()
             .filter_map(|v| v.to_str().ok())
-            .find_map(|c| {
-                c.split(';')
-                    .next()
-                    .filter(|kv| kv.trim_start().starts_with("SID="))
-            })
-            .map(|kv| kv.trim().to_owned());
+            .filter_map(|c| c.split(';').next())
+            .map(|kv| kv.trim().to_owned())
+            .filter(|kv| kv.contains('='))
+            .collect();
+        let cookie = session_cookie(&cookies);
         let body = common::read_text(resp).await.unwrap_or_default();
         if status.as_u16() == 403 {
             return Err(ClientError::Auth("IP banned after too many failed logins".into()));
@@ -713,5 +712,38 @@ mod tests {
         assert_eq!(item.output_path.as_deref(), Some("/dl/n"));
         assert_eq!(item.download_id.0, "abc");
         assert_eq!(item.eta_secs, None);
+    }
+}
+
+/// The session cookie from a login answer's `name=value` pairs. qBittorrent before 5.1 calls it `SID`; 5.1 and
+/// later call it `QBT_SID_<port>` by default (and let the name be changed), so either is taken, and otherwise the
+/// only cookie set.
+fn session_cookie(cookies: &[String]) -> Option<String> {
+    let name = |kv: &String| kv.split('=').next().unwrap_or("").to_owned();
+    cookies
+        .iter()
+        .find(|kv| name(kv) == "SID" || name(kv).starts_with("QBT_SID"))
+        .or(if cookies.len() == 1 { cookies.first() } else { None })
+        .cloned()
+}
+
+#[cfg(test)]
+mod session_cookie_tests {
+    use super::session_cookie;
+
+    #[test]
+    fn takes_the_old_and_the_new_names() {
+        let c = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(session_cookie(&c(&["SID=abc"])).as_deref(), Some("SID=abc"));
+        assert_eq!(
+            session_cookie(&c(&["other=1", "QBT_SID_8080=abc"])).as_deref(),
+            Some("QBT_SID_8080=abc")
+        );
+        assert_eq!(
+            session_cookie(&c(&["mysession=abc"])).as_deref(),
+            Some("mysession=abc")
+        );
+        assert_eq!(session_cookie(&c(&["a=1", "b=2"])), None);
+        assert_eq!(session_cookie(&[]), None);
     }
 }
