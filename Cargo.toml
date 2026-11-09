@@ -76,7 +76,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 futures = "0.3"
 hex = "0.4"
 # Audio tags and embedded covers (MP3/FLAC/M4A/M4B/OGG/Opus) for books and music.
-lofty = "0.22"
+lofty = "0.25"
 quick-xml = { version = "0.41", features = ["serialize"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "cookies", "socks", "multipart", "stream"] }
