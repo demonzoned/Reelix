@@ -26,7 +26,7 @@ librespot-metadata = { version = "0.8.0", default-features = false, features = [
 librespot-oauth = { version = "0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
 librespot-protocol = "0.8.0"
 rustypipe = { version = "0.11.4", default-features = false, features = ["rustls-tls-webpki-roots"] }
-aes = "0.8"
+aes = "0.9"
 ctr = "0.9"
 lofty.workspace = true
 
