@@ -175,6 +175,19 @@ pub struct TaskDto {
     pub last_error: Option<String>,
     /// A job for this task is currently queued or running.
     pub running: bool,
+    /// `interval_secs` at the current background work pace.
+    #[serde(default)]
+    pub paced_interval_secs: i64,
+}
+
+/// How often scheduled background work runs (System, Tasks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BackgroundWorkDto {
+    /// `normal`, `relaxed` (5 times slower), `light` (20 times) or `minimal` (50 times). A task
+    /// is never slowed past once a day, or its own interval when that is longer.
+    #[cfg_attr(feature = "openapi", schema(value_type = String, example = "normal"))]
+    pub pace: reelix_core::jobs::BackgroundPace,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
