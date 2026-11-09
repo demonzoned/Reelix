@@ -345,6 +345,142 @@ async fn setup_requires_the_token_unless_local() {
 }
 
 #[tokio::test]
+async fn setup_restore_needs_the_token_and_no_accounts() {
+    let mut app = app().await;
+    reconfigure(&mut app, |s| s.with_setup_token("tok-123"));
+    // Reelix's wizards send the CSRF header; a page on another site cannot.
+    let restore = |token: Option<&'static str>, peer: Option<&'static str>| Req {
+        peer,
+        headers: token
+            .map(|t| vec![("x-reelix-setup-token", t)])
+            .unwrap_or_default()
+            .into_iter()
+            .chain([("x-reelix-request", "1")])
+            .collect(),
+        ..Default::default()
+    };
+    for (token, peer) in [
+        (None, Some("192.0.2.1:5000")),
+        (Some("wrong"), Some("192.0.2.1:5000")),
+    ] {
+        let r = call(&app, Method::POST, "/api/v1/setup/restore", restore(token, peer)).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{:?}", r.body);
+    }
+    // A cross-site post from a browser on the server itself: no code is needed there, but the CSRF
+    // header is, and a page on another site cannot send it without the browser asking first.
+    let cross_site = Req {
+        peer: Some("127.0.0.1:5000"),
+        ..Default::default()
+    };
+    let r = call(&app, Method::POST, "/api/v1/setup/restore", cross_site).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{:?}", r.body);
+    // Past the checks, the upload reaches the backup service (not registered in these tests).
+    for (token, peer) in [
+        (Some("tok-123"), Some("192.0.2.1:5000")),
+        (None, Some("127.0.0.1:5000")),
+    ] {
+        let r = call(&app, Method::POST, "/api/v1/setup/restore", restore(token, peer)).await;
+        assert!(
+            r.status != StatusCode::FORBIDDEN && r.status != StatusCode::CONFLICT,
+            "{:?}",
+            r.status
+        );
+    }
+    let r = call(
+        &app,
+        Method::POST,
+        "/api/v1/setup",
+        json_body(json!({"username": "admin", "password": ADMIN_PW, "setup_token": "tok-123"})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    let r = call(
+        &app,
+        Method::POST,
+        "/api/v1/setup/restore",
+        restore(Some("tok-123"), Some("127.0.0.1:5000")),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{:?}", r.body);
+}
+
+#[tokio::test]
+async fn setup_from_the_server_needs_a_name_for_this_computer() {
+    // DNS rebinding: a page on another site points its own name at 127.0.0.1 and posts from the
+    // browser on the server. The request comes from loopback, but its Host is the other site's
+    // name, so the set-up code is still needed.
+    let mut app = app().await;
+    reconfigure(&mut app, |s| s.with_setup_token("tok-123"));
+    let rebound = |token: Option<&'static str>, host: &'static str| Req {
+        peer: Some("127.0.0.1:5000"),
+        headers: token
+            .map(|t| vec![("x-reelix-setup-token", t)])
+            .unwrap_or_default()
+            .into_iter()
+            .chain([("x-reelix-request", "1"), ("host", host)])
+            .collect(),
+        ..Default::default()
+    };
+    let r = call(
+        &app,
+        Method::POST,
+        "/api/v1/setup/restore",
+        rebound(None, "attacker.example:7700"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{:?}", r.body);
+    assert!(r.body.to_string().contains("localhost"), "{:?}", r.body);
+    let r = call(
+        &app,
+        Method::GET,
+        "/api/v1/setup",
+        rebound(None, "attacker.example:7700"),
+    )
+    .await;
+    assert_eq!(r.body["setup_token_required"], true);
+    // With the code, or with a name for this computer, it goes past the checks.
+    for (token, host) in [
+        (Some("tok-123"), "attacker.example:7700"),
+        (None, "localhost:7700"),
+        (None, "127.0.0.1:7700"),
+        (None, "[::1]:7700"),
+    ] {
+        let r = call(&app, Method::POST, "/api/v1/setup/restore", rebound(token, host)).await;
+        assert!(
+            r.status != StatusCode::FORBIDDEN && r.status != StatusCode::CONFLICT,
+            "{host}: {:?}",
+            r.status
+        );
+    }
+    let r = call(
+        &app,
+        Method::POST,
+        "/api/v1/setup",
+        Req {
+            body: Some(json!({"username": "admin", "password": ADMIN_PW})),
+            peer: Some("127.0.0.1:5000"),
+            headers: vec![("host", "attacker.example")],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{:?}", r.body);
+    let r = call(
+        &app,
+        Method::POST,
+        "/api/v1/setup",
+        Req {
+            body: Some(json!({"username": "admin", "password": ADMIN_PW})),
+            peer: Some("127.0.0.1:5000"),
+            headers: vec![("host", "localhost:7700")],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+}
+
+#[tokio::test]
 async fn setup_from_the_server_itself_needs_no_token() {
     let mut app = app().await;
     reconfigure(&mut app, |s| s.with_setup_token("tok-123"));

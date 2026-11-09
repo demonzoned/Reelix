@@ -129,7 +129,9 @@ services:
 docker compose up -d
 ```
 
-To build the image yourself, run `docker build -f docker/Dockerfile -t reelix .` from the repository root. The image includes the web UI and runs as `PUID:PGID`.
+To build the image yourself, run `docker build -f docker/Dockerfile -t reelix .` from the repository root. The image includes the web UI and runs as `PUID:PGID`. Add `--build-arg REELIX_WEB_FEATURES=classic-setup` to build it with the classic onboarding instead of the set-up wizard.
+
+On a server with no desktop, follow [Set up Reelix from a terminal only](docs/terminal-setup.md).
 
 ### Windows
 
@@ -195,15 +197,21 @@ Run the binary from the repository root so it finds the web UI in `crates/reelix
 
 > **Warning:** don't expose the port to the internet yet. Complete setup before exposing Reelix publicly (port forwarding, reverse proxy or tunnel).
 
-Open <http://localhost:7700>. The setup wizard walks you through:
+Open <http://localhost:7700>. The setup wizard first asks how you want to start:
 
-1. Creating the admin account. Unless you are browsing from the server itself, the wizard asks for the one-time setup token that Reelix prints to its log (and stdout) when it starts without any users, e.g. `docker logs reelix` or `journalctl -u reelix`. For the Windows service it is in `C:\ProgramData\Reelix\logs` (readable from an Administrator PowerShell). A new token is made at every start until the admin account exists.
-2. Connecting a media server (optional).
-3. Adding root folders for each library you want to manage.
-4. Adding a download client and indexers.
-5. Choosing defaults for requests.
+- **New install:** the admin account, what to follow (movies, series, books, music), the TMDB key, library folders, a torrent app and a Usenet app, which to prefer, sites to search (indexers), quality, when to get new movies, media servers and requests. Every step after the account can be skipped and changed later in Settings.
+- **Restore a Reelix backup:** choose a backup file. It is restored when Reelix restarts, with the accounts and settings in the backup.
+- **Migrate from the *arr apps:** the admin account, then Radarr, Sonarr, Prowlarr, Readarr, Lidarr or Jellyseerr by address and API key, with a preview before anything comes over. The rest of the steps follow, for anything the old apps did not have.
 
-Then add your TMDB API key under **Settings → Metadata**. Movies and TV need it; books, music and radio don't need any keys (a Podcast Index key is optional).
+Unless you are browsing from the server itself, the wizard asks for the one-time setup token that Reelix prints to its log (and stdout) when it starts without any users, e.g. `docker logs reelix` or `journalctl -u reelix`. For the Windows service it is in `C:\ProgramData\Reelix\logs` (readable from an Administrator PowerShell). A new token is made at every start until the admin account exists.
+
+**No desktop on the server?** Run the same wizard in a terminal: `docker exec -it reelix /app/reelix setup` (or `reelix setup`). Every command, from installing to the last question, is in [Set up Reelix from a terminal only](docs/terminal-setup.md). It asks the same questions and saves them through Reelix's API on the server, so no setup token is needed. Add `--plain` (or set `REELIX_PLAIN=1`) for plain lines that a screen reader can follow, with nothing redrawn.
+
+To ask the questions again later, open **Settings → Set-up Wizard** and choose **Launch wizard**.
+
+**Send feedback** is on every step of the wizard. A report names the step and opens a new GitHub issue; **Show as a QR code** sends it from a phone when the server is not online yet. Nothing typed into the wizard, and no password, key or setup token, is in a report.
+
+If you skipped the TMDB step, add the key under **Settings → Metadata**. Movies and TV need it; books, music and radio don't need any keys (a Podcast Index key is optional).
 
 For radio and podcasts, choose your Audiobookshelf podcast library and its folder under **Settings → Radio**, and add a Radio root folder under **Settings → Media management**.
 

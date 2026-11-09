@@ -45,5 +45,10 @@ web-sys = { version = "0.3", features = [
     "Window",
 ] }
 
+[features]
+# Build with Reelix's classic onboarding (account, media server, root folders, download client,
+# indexers, request defaults) instead of the set-up wizard: `trunk build --release --features classic-setup`.
+classic-setup = []
+
 [lints]
 workspace = true

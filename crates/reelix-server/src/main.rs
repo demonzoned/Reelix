@@ -39,6 +39,13 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some(Command::Setup { plain, url }) => reelix_server::setup_wizard::run(
+            &config,
+            reelix_server::setup_wizard::Options {
+                plain: *plain,
+                url: url.clone(),
+            },
+        ),
         Some(Command::Service { action }) => reelix_server::service::main(action, config, &cli),
         Some(Command::Backup { action }) => commands::main(Maintenance::Backup(action), &config),
         Some(Command::Restore { action }) => commands::main(Maintenance::Restore(action), &config),

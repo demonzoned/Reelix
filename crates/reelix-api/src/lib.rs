@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> Router {
 
     let v1 = Router::new()
         .route("/setup", get(setup::status).post(setup::complete))
+        .route("/setup/restore", post(setup::restore))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
@@ -111,6 +112,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     paths(
         routes::setup::status,
         routes::setup::complete,
+        routes::setup::restore,
         routes::auth::login,
         routes::auth::logout,
         routes::auth::me,

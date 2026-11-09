@@ -42,6 +42,16 @@ pub enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8898/login")]
         redirect_uri: String,
     },
+    /// Ask the install wizard's questions in this terminal, for a server with no desktop. Needs
+    /// Reelix running (with Docker: `docker exec -it reelix /app/reelix setup`).
+    Setup {
+        /// Plain lines that scroll, with nothing redrawn: for screen readers (or REELIX_PLAIN=1).
+        #[arg(long)]
+        plain: bool,
+        /// Reelix's address (default: this server, on --port).
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
+    },
     /// Manage the Reelix Windows service (Windows only).
     Service {
         #[command(subcommand)]
