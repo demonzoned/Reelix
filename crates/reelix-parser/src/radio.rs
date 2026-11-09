@@ -264,21 +264,56 @@ fn find_numbers(s: &str) -> Option<(u32, u32, usize, usize)> {
         r"(?i)(?:^|[^a-z0-9])(s(\d{1,4})\s?e(\d{1,4}))(?:$|[^a-z0-9])"
     );
     re!(X, r"(?i)(?:^|[^a-z0-9])((\d{1,2})x(\d{1,3}))(?:$|[^a-z0-9])");
+    // `Series One-Episode 1` (seen on a public indexer): numbers may be words, and the parts may be
+    // joined by hyphens with no spaces.
     re!(
         WORDS,
-        r"(?i)(?:^|[^a-z0-9])((?:series|season)\s+(\d{1,4}),?\s*(?:-\s*)?(?:episode|ep\.?)\s*(\d{1,4}))(?:$|[^a-z0-9])"
+        r"(?i)(?:^|[^a-z0-9])((?:series|season)[\s_-]*(\d{1,4}|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty),?[\s_-]*(?:episode|ep\.?)[\s_-]*(\d{1,4}|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty))(?:$|[^a-z0-9])"
     );
     for r in [&*SXE, &*WORDS, &*X] {
         if let Some(c) = r.captures(s) {
             let (Some(all), Some(a), Some(b)) = (c.get(1), c.get(2), c.get(3)) else {
                 continue;
             };
-            if let (Ok(a), Ok(b)) = (a.as_str().parse(), b.as_str().parse()) {
+            if let (Some(a), Some(b)) = (number(a.as_str()), number(b.as_str())) {
                 return Some((a, b, all.start(), all.end()));
             }
         }
     }
     None
+}
+
+/// `20` or `twenty`: series and episode numbers in figures, or as words up to twenty.
+fn number(s: &str) -> Option<u32> {
+    const WORDS: [&str; 21] = [
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+        "twenty",
+    ];
+    s.parse().ok().or_else(|| {
+        WORDS
+            .iter()
+            .position(|w| w.eq_ignore_ascii_case(s))
+            .and_then(|i| u32::try_from(i).ok())
+    })
 }
 
 /// Drops trailing rip words (codec, bitrate, `WEB`, …) and pulls bitrate words from anywhere.
@@ -581,6 +616,24 @@ mod tests {
         let p = parse_radio("Front Row 20261104.m4a");
         assert_eq!((p.show.as_str(), p.air_date), ("Front Row", d(2026, 11, 4)));
         assert_eq!(p.codec, Some(AudioCodec::Aac));
+    }
+
+    #[test]
+    fn numbers_as_words_and_hyphens_without_spaces() {
+        // A real release name from a public indexer.
+        let p = parse_radio("Hancocks Half Hour-Series One-Episode 1");
+        assert_eq!(
+            (p.show.as_str(), p.series, p.episode),
+            ("Hancocks Half Hour", Some(1), Some(1))
+        );
+        let p = parse_radio("Round the Horne Series Two Episode Twelve");
+        assert_eq!((p.series, p.episode), (Some(2), Some(12)));
+        // Figures still work, and a show whose name has such a word is left alone.
+        assert_eq!(parse_radio("Just a Minute Series 95, Episode 2").series, Some(95));
+        assert_eq!(
+            parse_radio("One Foot in the Grave S01E02").show,
+            "One Foot in the Grave"
+        );
     }
 
     #[test]
