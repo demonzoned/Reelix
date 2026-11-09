@@ -64,7 +64,7 @@ reelix-radio = { path = "crates/reelix-radio" }
 
 anyhow = "1"
 argon2 = "0.5"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws", "macros"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
