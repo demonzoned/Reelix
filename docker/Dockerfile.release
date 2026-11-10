@@ -9,8 +9,11 @@ ARG TARGETARCH
 ARG VERSION=dev
 
 # util-linux (setpriv) is part of the base image; tzdata makes TZ work.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata ffmpeg \
+# unrar unpacks downloads that hold only RAR archives. It is in Debian's non-free component
+# (freeware, free to redistribute) and adds about 0.3 MB.
+RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata ffmpeg unrar \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp handles YouTube downloads and uses Deno for YouTube's JavaScript. Both must

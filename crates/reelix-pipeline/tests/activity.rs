@@ -919,3 +919,78 @@ async fn bulk_remove_reports_each_failure_and_removes_the_rest() {
     };
     assert!(e.svc.remove_many(&too_many).await.is_err());
 }
+
+/// Copies RAR fixtures from `reelix-import` into a download folder. False when `unrar` is not on
+/// PATH (the unpacking tests in `reelix-import` say when that is not allowed).
+fn rar_download(folder: &Path, archives: &[&str]) -> bool {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../reelix-import/tests/fixtures/rar");
+    std::fs::create_dir_all(folder).unwrap();
+    for a in archives {
+        std::fs::copy(fixtures.join(a), folder.join(a)).unwrap();
+    }
+    std::process::Command::new("unrar")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
+#[tokio::test]
+async fn completed_torrent_with_only_rar_archives_is_unpacked_and_imported() {
+    let e = env(Protocol::Torrent, false).await;
+    let movie = add_movie(&e).await;
+    let title = "The.Matrix.1999.1080p.BluRay.x264-GRP";
+    let id = track(&e, "hash1", title, Some(movie), None, vec![]).await;
+    let folder = e.downloads.join(title);
+    let parts = ["split.part1.rar", "split.part2.rar", "split.part3.rar"];
+    if !rar_download(&folder, &parts) {
+        return;
+    }
+    e.client
+        .items
+        .lock()
+        .unwrap()
+        .push(item("hash1", title, DownloadState::Completed, Some(&folder)));
+
+    e.svc.poll().await.unwrap();
+    assert_eq!(state_of(&e, id).await, TrackedState::Imported);
+    let lib = files_under(&e.movies.join("The Matrix (1999)"));
+    assert_eq!(lib.len(), 1, "{lib:?}");
+    assert_eq!(std::fs::metadata(&lib[0]).unwrap().len(), 6000);
+    // The archives stay for seeding; the unpacked copy is gone once it is in the library.
+    let left: Vec<String> = files_under(&folder)
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, parts);
+    assert_eq!(history_events(&e).await, vec!["imported"]);
+}
+
+#[tokio::test]
+async fn password_protected_rar_waits_with_a_clear_message() {
+    let e = env(Protocol::Torrent, false).await;
+    let movie = add_movie(&e).await;
+    let title = "The.Matrix.1999.1080p.BluRay.x264-GRP";
+    let id = track(&e, "hash1", title, Some(movie), None, vec![]).await;
+    let folder = e.downloads.join(title);
+    if !rar_download(&folder, &["password.rar"]) {
+        return;
+    }
+    e.client
+        .items
+        .lock()
+        .unwrap()
+        .push(item("hash1", title, DownloadState::Completed, Some(&folder)));
+
+    e.svc.poll().await.unwrap();
+    let t = tracked::get(&e.db, id).await.unwrap().unwrap();
+    assert_eq!(t.state, TrackedState::ImportPending);
+    assert_eq!(
+        t.status_messages,
+        ["password.rar: the archive is password protected"]
+    );
+    // The next poll leaves it waiting instead of trying again.
+    e.svc.poll().await.unwrap();
+    assert_eq!(state_of(&e, id).await, TrackedState::ImportPending);
+    assert_eq!(files_under(&folder), [folder.join("password.rar")]);
+}

@@ -6,6 +6,7 @@
 //!   (hardlink / copy / move), recycle bin, permissions and free space.
 //! - [`matching`]: match parsed releases to expected movies and episodes.
 //! - [`content`]: finished downloads handed to the books and music importers.
+//! - [`unpack`]: RAR archives in finished downloads, unpacked with `unrar`.
 
 pub mod content;
 pub mod error;
@@ -13,6 +14,7 @@ pub mod files;
 pub mod matching;
 pub mod mediainfo;
 pub mod naming;
+pub mod unpack;
 
 pub use error::{Error, Result};
 

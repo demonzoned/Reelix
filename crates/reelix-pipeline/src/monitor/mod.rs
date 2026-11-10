@@ -28,6 +28,7 @@ use reelix_db::{Db, NewJob, now_ms};
 use reelix_downloaders::{DownloadId, DownloadItem, DownloadState, FailureAction, UsenetFailure};
 use reelix_import::files::TransferMode;
 use reelix_import::matching::{best_movie_match, match_parsed_episodes};
+use reelix_import::unpack::{UnpackConfig, remove_unpacked, unpack_download};
 use reelix_jobs::JobQueue;
 use reelix_library::LibraryService;
 use reelix_music::MusicService;
@@ -793,14 +794,24 @@ impl ActivityService {
             episode_ids: t.episode_ids.clone(),
             release_title: Some(t.title.clone()),
         };
-        let planned = fi.plan(source, &hint).await?;
+        let mut planned = fi.plan(source, &hint).await?;
+        let mut messages = Vec::new();
+        // A download that holds only RAR archives: unpack them next to the archives and look again.
+        let mut unpacked = Vec::new();
+        if planned.is_empty() && source.is_dir() {
+            let u = unpack_download(source, &UnpackConfig::default()).await;
+            messages.extend(u.messages);
+            unpacked = u.files;
+            if !unpacked.is_empty() {
+                planned = fi.plan(source, &hint).await?;
+            }
+        }
         let root = if source.is_dir() {
             source.to_path_buf()
         } else {
             source.parent().map(Path::to_path_buf).unwrap_or_default()
         };
         let mut imported = Vec::new();
-        let mut messages = Vec::new();
         for p in &planned {
             if p.accepted() {
                 match fi.execute(p, mode, std::slice::from_ref(&root)).await {
@@ -811,8 +822,12 @@ impl ActivityService {
                 messages.push(format!("{}: {}", p.relative.display(), p.rejections.join("; ")));
             }
         }
-        if planned.is_empty() {
+        if planned.is_empty() && messages.is_empty() {
             messages.push("No video files found in the download".into());
+        }
+        // The library has its own copy or link now; the archives stay for the client to seed.
+        if !unpacked.is_empty() && !imported.is_empty() && messages.is_empty() {
+            remove_unpacked(&unpacked).await;
         }
         Ok((imported, messages))
     }

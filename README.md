@@ -148,7 +148,7 @@ Either way, **Open Reelix** in the Start menu opens <http://localhost:7700>, upd
 2. Double-click `start-reelix.cmd`.
 3. Open <http://localhost:7700>.
 
-Settings and the database are stored in the `data` folder next to `reelix.exe`. Install [FFmpeg](https://ffmpeg.org/download.html) and make sure `ffprobe` is on your `PATH` so Reelix can read codec, resolution and audio details from imported files.
+Settings and the database are stored in the `data` folder next to `reelix.exe`. Install [FFmpeg](https://ffmpeg.org/download.html) and make sure `ffprobe` is on your `PATH` so Reelix can read codec, resolution and audio details from imported files. To import downloads that hold only RAR archives, put [UnRAR](https://www.rarlab.com/rar_add.htm) on your `PATH` too.
 
 ### Linux
 
@@ -170,7 +170,7 @@ cd reelix-<version>-linux-x86_64
 ./start-reelix.sh
 ```
 
-Then open <http://localhost:7700>. Settings and the database are stored in the `data` folder next to the binary (or pass `--data-dir`). Install `ffprobe` with your package manager (e.g. `apt install ffmpeg`).
+Then open <http://localhost:7700>. Settings and the database are stored in the `data` folder next to the binary (or pass `--data-dir`). Install `ffprobe` with your package manager (e.g. `apt install ffmpeg`). For downloads that hold only RAR archives, install `unrar` as well (on Debian and Ubuntu it is in the non-free and multiverse components).
 
 ### Updating
 

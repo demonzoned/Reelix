@@ -6,6 +6,9 @@ When releasing, rename `Unreleased` to the version and date (`## [0.2.0] - 2026-
 
 ## [Unreleased]
 
+### Added
+- **Downloads that hold only RAR archives are imported.** When a finished download has no video files but has RAR archives (one `.rar`, a `.part01.rar` set or a `.rar` and `.r00` set), Reelix unpacks the archives that hold a video into the download's folder and imports the video as usual. The archives are left for the download client to seed; the unpacked copy is removed once it is imported. A password-protected or damaged archive gets a message in the queue that says so, instead of "No video files found in the download". The Docker image now includes `unrar`; other installs need it on the `PATH` (#79).
+
 ## [0.8.7] - 2026-11-09
 
 ### Fixed

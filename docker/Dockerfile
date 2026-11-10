@@ -32,8 +32,11 @@ RUN cd crates/reelix-web && trunk build --release
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime
 ARG TARGETARCH
 # util-linux (setpriv) is part of the base image; tzdata makes TZ work.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata ffmpeg \
+# unrar unpacks downloads that hold only RAR archives. It is in Debian's non-free component
+# (freeware, free to redistribute) and adds about 0.3 MB.
+RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata ffmpeg unrar \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp handles YouTube downloads and uses Deno for YouTube's JavaScript. Both must
