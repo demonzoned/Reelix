@@ -4,7 +4,7 @@
 #   bin/amd64/reelix, bin/arm64/reelix, web/ (trunk dist), docker/entrypoint.sh
 # For a local from-source build, use docker/Dockerfile instead.
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 ARG TARGETARCH
 ARG VERSION=dev
 
