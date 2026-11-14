@@ -120,9 +120,7 @@ impl LibraryService {
             .videos_in(&folder)
             .await
             .into_iter()
-            .filter(|f| {
-                detect_sample(&f.path, f.size, None, m.runtime_minutes, &SampleRules::default()).is_none()
-            })
+            .filter(|f| !named_sample(f))
             .max_by_key(|f| f.size);
 
         let keep_rel = candidate
@@ -242,12 +240,11 @@ impl LibraryService {
         let by_rel: HashMap<&str, &FileRow> =
             existing.iter().map(|f| (f.relative_path.as_str(), f)).collect();
         let prober = self.prober().await?;
-        let runtime = s.runtime_minutes;
         let mut seen_files = HashSet::new();
         let mut linked: HashMap<i64, i64> = HashMap::new();
 
         for f in self.videos_in(&folder).await {
-            if detect_sample(&f.path, f.size, None, runtime, &SampleRules::default()).is_some() {
+            if named_sample(&f) {
                 continue;
             }
             let rel = f.relative.to_string_lossy().into_owned();
@@ -413,4 +410,12 @@ impl LibraryService {
         }
         Ok(())
     }
+}
+
+/// A file in a library folder is skipped as a sample only when its name or folder says so.
+/// The size rule of [`detect_sample`] is for downloads being imported: files already in the
+/// library were put there on purpose, and old low-bitrate episodes (20 MB for 22 minutes) are
+/// smaller than it allows.
+fn named_sample(f: &FoundFile) -> bool {
+    detect_sample(&f.path, f.size, None, None, &SampleRules::default()).is_some()
 }

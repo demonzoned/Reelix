@@ -6,6 +6,9 @@ When releasing, rename `Unreleased` to the version and date (`## [0.2.0] - 2026-
 
 ## [Unreleased]
 
+### Fixed
+- **Small files in the library are no longer skipped as samples.** A library scan treated any video under 3 MB per minute of running time (and under 70 MB) as a sample, so older low-bitrate episodes and films (20 MB for a 22-minute episode) showed as missing. Files already in a library folder are now skipped only when their name or folder says "sample"; imports from downloads keep the size rule.
+
 ## [0.8.7] - 2026-11-09
 
 ### Fixed
