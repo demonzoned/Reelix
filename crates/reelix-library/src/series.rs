@@ -12,7 +12,7 @@ use reelix_api_types::library::{
 use reelix_core::{ContentKind, MediaKind};
 use reelix_db::NewJob;
 use reelix_import::naming::SeriesNaming;
-use reelix_metadata::{ExternalSource, SeriesExternalId, SeriesMetadata};
+use reelix_metadata::{ExternalSource, MetaError, SeriesExternalId, SeriesMetadata};
 
 use crate::content_roots;
 use crate::convert::{images, ratings, series_status, year_u16};
@@ -223,13 +223,22 @@ impl LibraryService {
             }
             (None, None) => return Err(LibraryError::validation("tmdb_id or tvdb_id is required")),
         };
-        let meta = self.metadata.series(ext).await?;
+        let meta = series_metadata(self.metadata.as_ref(), ext, req.tvdb_id).await?;
         let Some(tmdb_id) = meta.tmdb_id else {
             return Err(LibraryError::validation("metadata has no TMDB id"));
         };
         if repo::id_by_tmdb(&self.db, tmdb_id).await?.is_some() {
             return Err(LibraryError::Conflict(format!(
                 "series with TMDB id {tmdb_id} is already in the library"
+            )));
+        }
+        // The TVDB id is checked too: a request may pair a new TMDB id with the TVDB id of a show
+        // already in the library, which would add that show a second time.
+        if let Some(tvdb_id) = meta.tvdb_id.or(meta.external_ids.tvdb)
+            && repo::id_by_tvdb(&self.db, tvdb_id).await?.is_some()
+        {
+            return Err(LibraryError::Conflict(format!(
+                "series with TVDB id {tvdb_id} is already in the library"
             )));
         }
         let mut s = blank_series();
@@ -620,5 +629,51 @@ pub(crate) fn series_hit(m: &SeriesMetadata) -> reelix_metadata::SearchHit {
         vote_count: m.ratings.vote_count,
         popularity: m.ratings.popularity,
         adult: false,
+    }
+}
+
+/// A series' metadata by `ext`. When that is a TMDB id the source cannot look up (open data
+/// without a Wikidata link answers `Unsupported`), the TVDB id is tried next.
+///
+/// `NotFound` is not retried: from TMDB it means the entry was removed, and a refresh marks the
+/// series deleted rather than moving it to whatever the TVDB id finds. The TVDB result keeps the
+/// TMDB id only when it has no TMDB link of its own, and that pairing is unverified, so it is
+/// logged; a result linked to another TMDB entry is refused, as the two ids name different shows.
+pub(crate) async fn series_metadata(
+    metadata: &dyn crate::MetadataSource,
+    ext: SeriesExternalId,
+    tvdb: Option<u32>,
+) -> std::result::Result<SeriesMetadata, MetaError> {
+    match (metadata.series(ext.clone()).await, ext, tvdb) {
+        (Err(MetaError::Unsupported(why)), SeriesExternalId::Tmdb(t), Some(tv)) => {
+            let mut m = metadata.series(SeriesExternalId::Tvdb(tv)).await?;
+            match m.tmdb_id.or(m.external_ids.tmdb) {
+                None => {
+                    tracing::warn!(
+                        tmdb_id = t,
+                        tvdb_id = tv,
+                        title = %m.title,
+                        "series found by TVDB id only; its TMDB id is taken from the request and is unverified"
+                    );
+                    m.tmdb_id = Some(t);
+                    m.external_ids.tmdb = Some(t);
+                }
+                Some(found) if found == t => {
+                    m.tmdb_id = Some(t);
+                    m.external_ids.tmdb = Some(t);
+                }
+                Some(found) => {
+                    tracing::warn!(
+                        tmdb_id = t,
+                        tvdb_id = tv,
+                        linked_tmdb_id = found,
+                        "the TVDB id belongs to another TMDB entry; not used"
+                    );
+                    return Err(MetaError::Unsupported(why));
+                }
+            }
+            Ok(m)
+        }
+        (result, _, _) => result,
     }
 }

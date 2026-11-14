@@ -57,16 +57,26 @@ impl Modules {
             reelix_providers::ProviderOptions::new(&deps.data_dir),
         )
         .await?;
-        // library (TMDB resolved per call from the providers' metadata settings)
+        // library (TMDB resolved per call from the providers' metadata settings; without a TMDB key,
+        // open data: films from Wikidata and Wikipedia, series from TVmaze, no key needed)
         let library_metadata;
         let library = {
             let p = providers.clone();
+            let open: std::sync::Arc<dyn reelix_library::MetadataSource> =
+                std::sync::Arc::new(reelix_metadata::OpenData::new(
+                    deps.http.clone(),
+                    reelix_metadata::OpenDataOptions {
+                        language: providers.metadata_config().language,
+                        ..Default::default()
+                    },
+                ));
             let metadata = reelix_library::DynMetadata::new(move || {
                 let p = p.clone();
+                let open = open.clone();
                 async move {
-                    p.metadata()
+                    Ok(p.metadata()
                         .map(|t| t as std::sync::Arc<dyn reelix_library::MetadataSource>)
-                        .map_err(|_| reelix_library::MetaError::NotConfigured("TMDB"))
+                        .unwrap_or(open))
                 }
             });
             let metadata = std::sync::Arc::new(metadata);
@@ -259,7 +269,6 @@ impl Modules {
                 .await?;
         // migration from Radarr/Sonarr/Prowlarr/Readarr/Lidarr/Jellyseerr
         let migrate = {
-            let p = providers.clone();
             std::sync::Arc::new(reelix_migrate::MigrateService::new(
                 reelix_migrate::Targets {
                     db: deps.db.clone(),
@@ -268,7 +277,8 @@ impl Modules {
                     books: Some(books.clone()),
                     music: Some(music.clone()),
                     metadata: library_metadata,
-                    metadata_ready: std::sync::Arc::new(move || p.metadata().is_ok()),
+                    // Films and series always have a source: TMDB with a key, open data without one.
+                    metadata_ready: std::sync::Arc::new(|| true),
                 },
                 deps.http.clone(),
             ))

@@ -18,6 +18,7 @@ pub mod listenbrainz;
 pub mod model;
 pub mod music;
 pub mod musicbrainz;
+pub mod open;
 pub mod openlibrary;
 pub mod tmdb;
 pub mod tvdb;
@@ -33,6 +34,7 @@ pub use listenbrainz::{ChartAlbum, ListenBrainz, ListenBrainzOptions, StatsRange
 pub use model::*;
 pub use music::*;
 pub use musicbrainz::{MusicBrainz, MusicBrainzOptions};
+pub use open::{OpenData, OpenDataOptions};
 pub use openlibrary::{OpenLibrary, OpenLibraryOptions};
 pub use tmdb::{ExternalSource, FindResults, Tmdb, TmdbAuth, TmdbOptions, image_url};
 pub use tvdb::{Tvdb, TvdbOptions, TvdbOrdering};

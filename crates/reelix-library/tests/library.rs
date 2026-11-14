@@ -168,6 +168,8 @@ struct FakeMeta {
     movies: Mutex<HashMap<u32, MovieMetadata>>,
     series: Mutex<HashMap<u32, SeriesMetadata>>,
     collections: Mutex<HashMap<u32, CollectionMetadata>>,
+    /// Answer a TMDB id it does not have with `Unsupported`, as open data does, not `NotFound`.
+    open_data: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
@@ -183,7 +185,15 @@ impl MetadataSource for FakeMeta {
     async fn series(&self, id: SeriesExternalId) -> Result<SeriesMetadata, MetaError> {
         let map = self.series.lock().unwrap();
         match id {
-            SeriesExternalId::Tmdb(t) => map.get(&t).cloned().ok_or(MetaError::NotFound),
+            SeriesExternalId::Tmdb(t) => {
+                map.get(&t)
+                    .cloned()
+                    .ok_or(if self.open_data.load(std::sync::atomic::Ordering::Relaxed) {
+                        MetaError::Unsupported("not on Wikidata")
+                    } else {
+                        MetaError::NotFound
+                    })
+            }
             SeriesExternalId::Tvdb(t) => map
                 .values()
                 .find(|s| s.tvdb_id == Some(t))
@@ -442,6 +452,127 @@ async fn add_movie_list_edit_and_conflicts() {
     let av = e.svc.movie_availability(&[603, 604]).await.unwrap();
     assert_eq!(av[&603].status, AvailabilityStatus::Unmonitored);
     assert_eq!(av[&604].status, AvailabilityStatus::NotInLibrary);
+}
+
+#[tokio::test]
+async fn a_series_the_source_cannot_find_by_tmdb_id_is_found_by_tvdb_and_not_deleted() {
+    // Open data (no TMDB key) can't always turn a TMDB id into a show; the TVDB id is tried next,
+    // the known TMDB id is kept, and a refresh doesn't mark the series deleted.
+    let e = env().await;
+    e.meta.open_data.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut s = show(7000, vec![season(1, vec![episode(1, 1, "2020-01-01")])]);
+    s.tmdb_id = None; // the source doesn't know the TMDB id
+    s.tvdb_id = Some(8000);
+    e.meta.series.lock().unwrap().insert(0, s);
+    let added = e
+        .svc
+        .add_series(AddSeriesRequest {
+            tmdb_id: Some(7000),
+            tvdb_id: Some(8000),
+            quality_profile_id: 1,
+            root_folder_id: e.tv_root_id,
+            monitor: SeriesMonitor::All,
+            seasons: None,
+            series_type: SeriesType::Standard,
+            season_folder: true,
+            monitor_new_items: NewItemMonitor::All,
+            tags: vec![],
+            search_on_add: false,
+            search_cutoff_unmet: false,
+            path: None,
+            added_by_request_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(added.tmdb_id, Some(7000));
+    e.svc.refresh_series(added.id).await.unwrap();
+    let after = e.svc.get_series(added.id).await.unwrap();
+    assert_ne!(format!("{:?}", after.status).to_lowercase(), "deleted");
+}
+
+fn add_series_req(e: &Env, tmdb_id: u32, tvdb_id: u32) -> AddSeriesRequest {
+    AddSeriesRequest {
+        tmdb_id: Some(tmdb_id),
+        tvdb_id: Some(tvdb_id),
+        quality_profile_id: 1,
+        root_folder_id: e.tv_root_id,
+        monitor: SeriesMonitor::All,
+        seasons: None,
+        series_type: SeriesType::Standard,
+        season_folder: true,
+        monitor_new_items: NewItemMonitor::All,
+        tags: vec![],
+        search_on_add: false,
+        search_cutoff_unmet: false,
+        path: None,
+        added_by_request_id: None,
+    }
+}
+
+#[tokio::test]
+async fn a_tmdb_id_paired_with_a_tvdb_id_already_in_the_library_is_refused() {
+    // A client sends a new TMDB id with the TVDB id of a show already added: the fallback finds
+    // that show by its TVDB id, and adding it again would make a second row in the same folder.
+    let e = env().await;
+    e.meta.open_data.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut s = show(7100, vec![season(1, vec![episode(1, 1, "2020-01-01")])]);
+    s.tmdb_id = None;
+    s.tvdb_id = Some(8100);
+    e.meta.series.lock().unwrap().insert(0, s);
+    e.svc.add_series(add_series_req(&e, 7100, 8100)).await.unwrap();
+    let again = e.svc.add_series(add_series_req(&e, 7199, 8100)).await;
+    assert!(matches!(again, Err(LibraryError::Conflict(_))), "{again:?}");
+    assert_eq!(
+        e.svc
+            .list_series(&SeriesListQuery::default())
+            .await
+            .unwrap()
+            .total,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_tvdb_id_linked_to_another_tmdb_entry_is_not_used() {
+    // The TVDB result names its own TMDB entry, so the request's TMDB id is a different show.
+    let e = env().await;
+    e.meta.open_data.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut s = show(7200, vec![season(1, vec![episode(1, 1, "2020-01-01")])]);
+    s.tvdb_id = Some(8200);
+    e.meta.series.lock().unwrap().insert(0, s);
+    let r = e.svc.add_series(add_series_req(&e, 7299, 8200)).await;
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(
+        e.svc
+            .list_series(&SeriesListQuery::default())
+            .await
+            .unwrap()
+            .total,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_series_removed_from_tmdb_is_marked_deleted_not_moved_by_its_tvdb_id() {
+    // With a TMDB key, NotFound means removed from TMDB: the TVDB id is not tried, so the row is
+    // not moved to whatever TMDB entry that TVDB id has now.
+    let e = env().await;
+    e.meta.series.lock().unwrap().insert(
+        7300,
+        show(7300, vec![season(1, vec![episode(1, 1, "2020-01-01")])]),
+    );
+    let added = e.svc.add_series(add_series_req(&e, 7300, 8300)).await.unwrap();
+    let moved = {
+        let mut map = e.meta.series.lock().unwrap();
+        let mut s = map.remove(&7300).unwrap();
+        s.tmdb_id = Some(7301);
+        s
+    };
+    e.meta.series.lock().unwrap().insert(7301, moved);
+    e.svc.refresh_series(added.id).await.unwrap();
+    let after = e.svc.get_series(added.id).await.unwrap();
+    assert_eq!(after.tmdb_id, Some(7300));
+    assert_eq!(format!("{:?}", after.status).to_lowercase(), "deleted");
 }
 
 #[tokio::test]

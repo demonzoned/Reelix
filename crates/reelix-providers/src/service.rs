@@ -1779,7 +1779,9 @@ impl ProviderService {
             push(
                 "metadata",
                 HealthLevel::Warning,
-                "TMDB is not configured; add an API key in Settings → Metadata".into(),
+                "TMDB is not configured, so films and series use open data (Wikidata and TVmaze) \
+                 without film posters, collections or Discover; add an API key in Settings → Metadata"
+                    .into(),
             );
         }
 

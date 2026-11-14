@@ -85,7 +85,13 @@ impl LibraryService {
     pub async fn refresh_series(&self, id: i64) -> Result<()> {
         let mut s = self.series_row(id).await?;
         let tmdb = s.tmdb_id.unwrap_or_default();
-        let meta = match self.metadata.series(SeriesExternalId::Tmdb(tmdb)).await {
+        let meta = match crate::series::series_metadata(
+            self.metadata.as_ref(),
+            SeriesExternalId::Tmdb(tmdb),
+            s.tvdb_id,
+        )
+        .await
+        {
             Ok(m) => m,
             Err(MetaError::NotFound) => {
                 s.status = SeriesStatus::Deleted;
