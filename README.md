@@ -259,6 +259,7 @@ format = "pretty"             # pretty | json
 | `REELIX_SECRET_KEY_FILE`, `REELIX_SECRET_KEY` | Key used to encrypt stored secrets |
 | `REELIX_SECURE_COOKIES` | `Secure` flag on session cookies |
 | `REELIX_LOG_LEVEL`, `REELIX_LOG_FORMAT` | Logging |
+| `REELIX_TMDB_BASE_URL`, `REELIX_TVDB_BASE_URL` | Metadata: a mirror, caching proxy or test stand-in for TMDB and TVDB |
 | `PUID`, `PGID`, `UMASK`, `TZ` | Docker only |
 
 Command-line flags: `--data-dir`, `--config`, `--port` and `--bind`. Run `reelix --help` for details.

@@ -48,13 +48,19 @@ pub struct Modules {
 
 impl Modules {
     pub async fn build(deps: Deps) -> anyhow::Result<Self> {
+        deps.config.warn_about_plain_http_metadata();
         // providers
         let providers = reelix_providers::ProviderService::new(
             deps.db.clone(),
             deps.secrets.clone(),
             deps.events.clone(),
             deps.http.clone(),
-            reelix_providers::ProviderOptions::new(&deps.data_dir),
+            {
+                let mut o = reelix_providers::ProviderOptions::new(&deps.data_dir);
+                o.tmdb_base_url = deps.config.tmdb_base_url.clone();
+                o.tvdb_base_url = deps.config.tvdb_base_url.clone();
+                o
+            },
         )
         .await?;
         // library (TMDB resolved per call from the providers' metadata settings)
