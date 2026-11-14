@@ -6,6 +6,9 @@ When releasing, rename `Unreleased` to the version and date (`## [0.2.0] - 2026-
 
 ## [Unreleased]
 
+### Fixed
+- **Reelix starts when its data folder is on a mergerfs pool or another file system without shared memory.** It stopped at once with "migration error ... (code: 5386) disk I/O error", because SQLite's write-ahead log needs a memory-mapped `-shm` file, and mergerfs with `cache.files=off` (its default) cannot map one. Reelix now falls back to a rollback journal and logs a warning. A local disk is still faster.
+
 ## [0.8.7] - 2026-11-09
 
 ### Fixed
