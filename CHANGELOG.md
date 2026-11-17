@@ -6,6 +6,13 @@ When releasing, rename `Unreleased` to the version and date (`## [0.2.0] - 2026-
 
 ## [Unreleased]
 
+### Added
+- **aria2 download client:** add aria2 through its JSON-RPC interface (default port 6800) for
+  magnet links and `.torrent` files. Categories are folder names, so Reelix stores each category
+  under its own subfolder and only tracks those folders. Pause/resume, queue priority, seed
+  ratio/time and connection tests with health warnings are supported; aria2 cannot delete files
+  over RPC, so removing a download only clears it from aria2.
+
 ## [0.8.7] - 2026-11-09
 
 ### Fixed

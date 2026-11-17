@@ -41,7 +41,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "Download client",
-        blurb: "Hook up qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet or a blackhole folder. Use Test to check the connection.",
+        blurb: "Hook up aria2, qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet or a blackhole folder. Use Test to check the connection.",
     },
     Step {
         title: "Indexers",

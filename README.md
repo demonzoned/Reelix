@@ -42,7 +42,7 @@ Reelix does the jobs of Radarr, Sonarr, Prowlarr, Jellyseerr, Readarr and Lidarr
 - Torznab and Newznab indexers, plus YAML (Cardigann-style) indexer definitions.
 - Rate limiting, back-off, and automatic disabling of failing indexers. Per-indexer categories, priorities, tags and seed goals.
 - HTTP and SOCKS5 proxies, and FlareSolverr for Cloudflare-protected sites.
-- **Torrent clients:** qBittorrent, Transmission, Deluge, rTorrent and a blackhole folder.
+- **Torrent clients:** aria2, qBittorrent, Transmission, Deluge, rTorrent and a blackhole folder.
 - **Usenet clients:** SABnzbd, NZBGet and a blackhole folder.
 - **Soulseek** through [slskd](https://github.com/slskd/slskd), as both an indexer and a download client, for music, books, audiobooks and radio; see [Soulseek setup](docs/soulseek.md).
 - Automatic import of finished downloads, failed-download handling with blocklisting and a new search, and remote path mappings for clients on another host.

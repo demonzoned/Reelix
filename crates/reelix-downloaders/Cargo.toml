@@ -1,6 +1,6 @@
 [package]
 name = "reelix-downloaders"
-description = "Download client adapters: qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet, blackhole"
+description = "Download client adapters: aria2, qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet, blackhole"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -115,9 +115,10 @@ Running it means **one binary, one database, one config, one login, one API**. Y
 - Optional: expose Reelix as a Torznab/Newznab **aggregator endpoint** for external tools.
 
 ### Download Clients
-- **Torrent:** qBittorrent, Transmission, Deluge, rTorrent/ruTorrent, a blackhole folder.
+- **Torrent:** aria2 (JSON-RPC), qBittorrent, Transmission, Deluge, rTorrent/ruTorrent, a blackhole folder.
 - **Usenet:** SABnzbd (first-class, see [SABnzbd spec](#sabnzbd-usenet)), NZBGet, a blackhole folder.
-- Per-client category or label, priority, and tags.
+- Per-client category or label, priority, and tags. aria2 has no labels, so Reelix downloads into
+  `{directory}/{category}` and only tracks those folders.
 - Completed-download handling: automatic import, remove after seeding goals are met.
 - Failed-download handling: blocklist the release, then search again automatically.
 - Remote path mappings for clients that run on another host or container.
@@ -326,7 +327,7 @@ reelix/
 │   ├── reelix-decision/        # quality profiles, custom formats, scoring, specs
 │   ├── reelix-metadata/        # TMDB, TVDB, XEM, Trakt clients + caching, Open Library, MusicBrainz + Cover Art Archive
 │   ├── reelix-indexers/        # Torznab, Newznab, YAML definition engine, ratelimit
-│   ├── reelix-downloaders/     # qBittorrent, Transmission, Deluge, SAB, NZBGet…
+│   ├── reelix-downloaders/     # aria2, qBittorrent, Transmission, Deluge, SAB, NZBGet…
 │   ├── reelix-import/          # ffprobe, file matching, rename engine, FS ops
 │   ├── reelix-library/         # movie/series services, monitoring, refresh, scan
 │   ├── reelix-books/           # authors, books, editions, ebook/audiobook import
@@ -1091,7 +1092,7 @@ The import runs through the **API** of the running source app, with a fallback t
 
 *Last updated 2026-10-31.*
 
-**Working (movies and TV, M0–M7):** setup wizard, login and users; quality profiles, custom formats and the decision engine; movie and series libraries with scan, import, rename and metadata refresh; Torznab/Newznab indexers with health, stats and manual search; SABnzbd, NZBGet, qBittorrent, Transmission, Deluge and blackhole clients; the search → grab → track → import pipeline with manual import, history and blocklist; calendar and iCal feed; discovery, requests, approvals, quotas and issues; Jellyfin/Emby/Plex login and refresh; eleven notifiers; import lists and watchlist sync.
+**Working (movies and TV, M0–M7):** setup wizard, login and users; quality profiles, custom formats and the decision engine; movie and series libraries with scan, import, rename and metadata refresh; Torznab/Newznab indexers with health, stats and manual search; SABnzbd, NZBGet, aria2, qBittorrent, Transmission, Deluge and blackhole clients; the search → grab → track → import pipeline with manual import, history and blocklist; calendar and iCal feed; discovery, requests, approvals, quotas and issues; Jellyfin/Emby/Plex login and refresh; eleven notifiers; import lists and watchlist sync.
 
 **Working (books and music, M8–M9):** authors, books, editions and series with separate ebook/audiobook monitoring, profiles and root folders; artists, albums, release choice and tracks with metadata profiles; Open Library and MusicBrainz/Cover Art Archive metadata (rate-limited and cached); book and music release parsers (175 and 281 fixtures, 100% pass); ebook, audiobook and music quality families with default profiles and size limits; book/music indexer categories and search modes, and book/music download-client categories; automatic, RSS and interactive search, grab, tracking, atomic import with EPUB/M4B/audio tag and cover writing (copying instead of hardlinking when tags are written), history and blocklist; library scan, import and rename; book and album requests with formats, quotas and auto-approve; Audiobookshelf, Kavita, Calibre-Web and Navidrome refresh; Last.fm, ListenBrainz and Spotify import lists.
 
@@ -1183,7 +1184,7 @@ Each milestone ends with a tagged pre-release and a working Docker image. Books 
 
 ### M4 — Download Clients & Import Pipeline *(weeks 12–16)*
 - [x] **SABnzbd adapter** (full spec in [Download Client Integrations](#sabnzbd-usenet)): add via upload/URL, queue + history tracking, failure classification, health checks
-- [x] qBittorrent, Transmission, Deluge, NZBGet, blackhole adapters
+- [x] qBittorrent, Transmission, Deluge, aria2, NZBGet, blackhole adapters
 - [x] Search → decision → grab flow; interactive search UI with rejection reasons
 - [x] Queue tracking, completed and failed download handling, remote path mappings
 - [x] Import: hardlink/move/copy, upgrades, recycle bin, permissions

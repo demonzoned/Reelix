@@ -22,13 +22,14 @@ fn with(mut v: Value, extra: Value) -> Value {
 }
 
 /// (implementation, default movie category, default TV category)
-const CATEGORY_CLIENTS: [(&str, &str, &str); 6] = [
+const CATEGORY_CLIENTS: [(&str, &str, &str); 7] = [
     ("sabnzbd", "movies", "tv"),
     ("nzbget", "movies", "tv"),
     ("qbittorrent", "movies-reelix", "tv-reelix"),
     ("transmission", "movies-reelix", "tv-reelix"),
     ("deluge", "movies-reelix", "tv-reelix"),
     ("rtorrent", "movies-reelix", "tv-reelix"),
+    ("aria2", "movies-reelix", "tv-reelix"),
 ];
 
 #[test]

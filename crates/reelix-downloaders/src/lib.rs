@@ -1,10 +1,11 @@
-//! Download client adapters: qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet, slskd,
-//! blackhole.
+//! Download client adapters: aria2, qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet,
+//! slskd, blackhole.
 //!
 //! Every adapter implements [`DownloadClient`], declares a [`ProviderSchema`] (see [`schemas`])
 //! and is constructed from a validated settings object through [`build`]. Adapters only ever
 //! read and touch downloads in Reelix's own categories.
 
+pub mod aria2;
 pub mod blackhole;
 pub mod common;
 pub mod deluge;
@@ -111,13 +112,14 @@ pub trait DownloadClient: Send + Sync {
 }
 
 /// Implementation ids accepted by [`build`].
-pub const IMPLEMENTATIONS: [&str; 9] = [
+pub const IMPLEMENTATIONS: [&str; 10] = [
     sabnzbd::IMPLEMENTATION,
     nzbget::IMPLEMENTATION,
     qbittorrent::IMPLEMENTATION,
     transmission::IMPLEMENTATION,
     deluge::IMPLEMENTATION,
     rtorrent::IMPLEMENTATION,
+    aria2::IMPLEMENTATION,
     blackhole::TORRENT_IMPLEMENTATION,
     blackhole::USENET_IMPLEMENTATION,
     slskd::IMPLEMENTATION,
@@ -132,6 +134,7 @@ pub fn schemas() -> Vec<ProviderSchema> {
         transmission::schema(),
         deluge::schema(),
         rtorrent::schema(),
+        aria2::schema(),
         blackhole::torrent_schema(),
         blackhole::usenet_schema(),
         slskd::schema(),
@@ -153,6 +156,7 @@ pub fn protocol_of(implementation: &str) -> Option<Protocol> {
         | transmission::IMPLEMENTATION
         | deluge::IMPLEMENTATION
         | rtorrent::IMPLEMENTATION
+        | aria2::IMPLEMENTATION
         | blackhole::TORRENT_IMPLEMENTATION => Some(Protocol::Torrent),
         slskd::IMPLEMENTATION => Some(Protocol::Soulseek),
         _ => None,
@@ -172,6 +176,7 @@ pub fn build(
         transmission::IMPLEMENTATION => Box::new(transmission::Transmission::from_settings(settings, ctx)?),
         deluge::IMPLEMENTATION => Box::new(deluge::Deluge::from_settings(settings, ctx)?),
         rtorrent::IMPLEMENTATION => Box::new(rtorrent::RTorrent::from_settings(settings, ctx)?),
+        aria2::IMPLEMENTATION => Box::new(aria2::Aria2::from_settings(settings, ctx)?),
         blackhole::TORRENT_IMPLEMENTATION => Box::new(blackhole::Blackhole::from_settings(
             Protocol::Torrent,
             settings,
