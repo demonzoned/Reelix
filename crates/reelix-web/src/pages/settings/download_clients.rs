@@ -16,7 +16,7 @@ use crate::state::Toasts;
 pub fn DownloadClientsPage() -> impl IntoView {
     require_admin();
     view! {
-        <PageHeader title="Download Clients" subtitle="qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet and blackhole folders." />
+        <PageHeader title="Download Clients" subtitle="aria2, qBittorrent, Transmission, Deluge, rTorrent, SABnzbd, NZBGet and blackhole folders." />
         <div class="stack">
             <ProviderListCard kind=ProviderKind::DownloadClient title="Clients" />
             <RemotePathMappings />

@@ -1,6 +1,6 @@
 //! Process lifecycle: startup sequence, serving and graceful shutdown.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -108,11 +108,13 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let web_ui = Arc::new(WebUi::load(&web_dir, &config.url_base));
     let app = web::build_app(reelix_api::router(state), web_ui, &config.url_base);
 
-    let addr = SocketAddr::new(config.bind, config.port);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("binding {addr}"))?;
-    tracing::info!("listening on http://{addr}{}/", config.url_base);
+    let (listener, dual_stack) = bind_listener(config.bind, config.port).await?;
+    let addr = listener.local_addr().context("reading the listener address")?;
+    if dual_stack {
+        tracing::info!("listening on http://{addr}{}/ (IPv4 and IPv6)", config.url_base);
+    } else {
+        tracing::info!("listening on http://{addr}{}/", config.url_base);
+    }
 
     let serve = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal(cancel.clone()));
@@ -140,6 +142,42 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     db.pool().close().await;
     tracing::info!("shutdown complete");
     Ok(())
+}
+
+/// Binds the HTTP listener. An unspecified address (`0.0.0.0` or `::`) gets a dual-stack IPv6
+/// socket whose IPv4-mapped addresses serve IPv4 clients too, so both families reach the port;
+/// when that is unavailable (no IPv6 stack) it falls back to the configured family alone.
+///
+/// The flag reports whether the socket is dual-stack.
+async fn bind_listener(bind: IpAddr, port: u16) -> anyhow::Result<(tokio::net::TcpListener, bool)> {
+    if bind.is_unspecified() {
+        match dual_stack_listener(port) {
+            Ok(listener) => return Ok((listener, true)),
+            Err(e) => {
+                tracing::warn!("cannot bind [::]:{port} for IPv4 and IPv6 ({e}); falling back to {bind}")
+            }
+        }
+    }
+    let addr = SocketAddr::new(bind, port);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("binding {addr}"))?;
+    Ok((listener, false))
+}
+
+/// Non-blocking `[::]` TCP listener with `IPV6_V6ONLY` cleared (dual-stack).
+fn dual_stack_listener(port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_only_v6(false)?;
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.set_nonblocking(true)?;
+    let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    tokio::net::TcpListener::from_std(socket.into())
 }
 
 /// `REELIX_SECRET_KEY` (base64, 32 bytes) overrides the key file.
@@ -191,4 +229,44 @@ async fn shutdown_signal(cancel: CancellationToken) {
         () = cancel.cancelled() => {}
     }
     cancel.cancel();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    /// IPv4 must always reach a listener created for an unspecified bind, and IPv6 whenever the
+    /// platform has a usable dual-stack socket.
+    #[tokio::test]
+    async fn unspecified_bind_accepts_ipv4_and_ipv6() {
+        let (listener, dual_stack) = bind_listener(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+            .await
+            .expect("binding an ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+
+        for target in ["127.0.0.1", "::1"] {
+            if target == "::1" && !dual_stack {
+                continue;
+            }
+            let connect = tokio::net::TcpStream::connect(format!("{target}:{port}"));
+            let (client, accepted) = tokio::join!(connect, listener.accept());
+            client.unwrap_or_else(|e| panic!("connecting to {target}:{port}: {e}"));
+            accepted.expect("accepting a connection");
+        }
+    }
+
+    /// A specific address keeps its own family.
+    #[tokio::test]
+    async fn specific_bind_stays_single_family() {
+        let bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let (listener, dual_stack) = bind_listener(bind, 0).await.expect("binding loopback");
+        assert!(!dual_stack);
+        let port = listener.local_addr().unwrap().port();
+        let connect = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port));
+        let (client, accepted) = tokio::join!(connect, listener.accept());
+        client.expect("IPv4 loopback connect");
+        accepted.expect("accepting a connection");
+    }
 }

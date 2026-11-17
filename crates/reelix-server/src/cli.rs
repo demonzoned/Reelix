@@ -21,7 +21,7 @@ pub struct Cli {
     /// HTTP port (default: 7700).
     #[arg(long, global = true)]
     pub port: Option<u16>,
-    /// Address to bind (default: 0.0.0.0).
+    /// Address to bind (default: 0.0.0.0, which listens on IPv4 and IPv6).
     #[arg(long, global = true, value_name = "IP")]
     pub bind: Option<IpAddr>,
     #[command(subcommand)]
