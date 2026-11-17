@@ -310,6 +310,8 @@ pub fn default_config_template() -> String {
 # Most settings live in the database and are edited in the web UI.
 
 [server]
+# Address to listen on. An unspecified address (0.0.0.0 or ::) accepts both
+# IPv4 and IPv6 clients; a specific address accepts that family only.
 # bind = "0.0.0.0"
 # port = {DEFAULT_PORT}
 # Serve under a sub-path behind a reverse proxy, e.g. "/reelix".

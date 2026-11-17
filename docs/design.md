@@ -992,7 +992,7 @@ Precedence: **CLI flags > environment variables > `config.toml` > defaults.** Mo
 ```toml
 # /config/config.toml
 [server]
-bind = "0.0.0.0"
+bind = "0.0.0.0"          # unspecified addresses listen on IPv4 and IPv6
 port = 7700
 url_base = ""            # e.g. "/reelix" behind a reverse proxy
 

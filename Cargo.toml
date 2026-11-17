@@ -87,6 +87,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
 sha2 = "0.10"
+# Dual-stack (IPv4 + IPv6) listener sockets.
+socket2 = "0.6"
 # Release archives for self-update.
 tar = { version = "0.4", default-features = false }
 flate2 = "1"

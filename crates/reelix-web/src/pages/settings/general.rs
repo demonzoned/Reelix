@@ -139,7 +139,7 @@ fn ServerForm(s: ServerSettingsDto) -> impl IntoView {
                         <label for="srv-bind">"Bind address"</label>
                         <input id="srv-bind" class="input mono" prop:value=move || bind.get()
                             on:input=move |e| bind.set(event_target_value(&e)) />
-                        <span class="field-hint">"0.0.0.0 listens on every interface; 127.0.0.1 only on this computer."</span>
+                        <span class="field-hint">"0.0.0.0 listens on every interface (IPv4 and IPv6); 127.0.0.1 only on this computer."</span>
                     </div>
                     <div class="field">
                         <label for="srv-port">"Port"</label>

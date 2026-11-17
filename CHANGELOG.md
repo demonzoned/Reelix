@@ -7,6 +7,9 @@ When releasing, rename `Unreleased` to the version and date (`## [0.2.0] - 2026-
 ## [Unreleased]
 
 ### Added
+- **Dual-stack listening:** when `server.bind` is unspecified (`0.0.0.0`, the default, or `::`) the
+  HTTP port now serves IPv4 and IPv6 clients at once through a dual-stack socket, falling back to
+  the configured family when the platform has no IPv6 stack.
 - **aria2 download client:** add aria2 through its JSON-RPC interface (default port 6800) for
   magnet links and `.torrent` files. Categories are folder names, so Reelix stores each category
   under its own subfolder and only tracks those folders. Pause/resume, queue priority, seed
