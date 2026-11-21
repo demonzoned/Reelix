@@ -26,9 +26,6 @@ ignore = [
     # No fixed rsa release exists. The attack needs private-key decryption; librespot and
     # openidconnect only verify signatures with public keys.
     { id = "RUSTSEC-2023-0071", reason = "rsa is used only for public-key signature verification" },
-    # crypto-bigint 0.5 is pinned by elliptic-curve 0.13 (openidconnect's p256/p384), which
-    # only verifies token signatures with public keys.
-    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 only handles public values in signature verification" },
 ]
 
 [licenses]
