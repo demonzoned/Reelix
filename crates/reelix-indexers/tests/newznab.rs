@@ -294,6 +294,60 @@ async fn http_proxy_is_used() {
     assert!(idx.capabilities().await.unwrap().movie_search.available);
 }
 
+/// with private addresses blocked, a site the local DNS cannot resolve is still searched
+/// through the proxy, which looks it up itself.
+#[tokio::test]
+async fn proxy_resolves_a_site_the_local_dns_cannot() {
+    let proxy = MockServer::start().await;
+    Mock::given(query_param("t", "caps"))
+        .respond_with(xml(fixture("torznab_caps.xml")))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(query_param("q", "Copper Valley"))
+        .respond_with(xml(fixture("torznab_search.xml")))
+        .expect(1)
+        .mount(&proxy)
+        .await;
+    let addr = proxy.address();
+    let mut c = ctx(1, "p");
+    c.allow_private_addresses = false;
+    c.proxy = Some(ProxyConfig {
+        kind: ProxyKind::Http,
+        host: addr.ip().to_string(),
+        port: addr.port(),
+        username: None,
+        password: None,
+    });
+    let idx = build("torznab", &json!({"base_url": "http://indexer.invalid"}), &c).unwrap();
+    assert!(idx.capabilities().await.unwrap().movie_search.available);
+    let q = SearchQuery {
+        term: Some("Copper Valley".into()),
+        ..SearchQuery::tv()
+    };
+    assert_eq!(idx.search(&q).await.unwrap().len(), 2);
+
+    // Without the proxy the local DNS is asked, and fails for the same site.
+    c.proxy = None;
+    let idx = build("torznab", &json!({"base_url": "http://indexer.invalid"}), &c).unwrap();
+    assert!(matches!(
+        idx.capabilities().await,
+        Err(IndexerError::Blocked(m)) if m.contains("cannot resolve")
+    ));
+    // Behind the proxy, private literals are still refused.
+    c.proxy = Some(ProxyConfig {
+        kind: ProxyKind::Http,
+        host: addr.ip().to_string(),
+        port: addr.port(),
+        username: None,
+        password: None,
+    });
+    assert!(matches!(
+        build("torznab", &json!({"base_url": "http://192.168.1.10:9117"}), &c),
+        Err(IndexerError::Blocked(_))
+    ));
+}
+
 #[tokio::test]
 async fn build_validation_and_ssrf_guard() {
     assert!(matches!(

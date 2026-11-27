@@ -213,7 +213,10 @@ fn definitions_source_ok(url: &url::Url) -> bool {
 /// link-local addresses are refused when connecting (so DNS rebinding can't get round it), and
 /// redirects to such literals are not followed. For URLs that come from users.
 pub fn public_http_client() -> reqwest::Result<reqwest::Client> {
-    let guard = AddressGuard { allow_private: false };
+    let guard = AddressGuard {
+        allow_private: false,
+        remote_dns: false,
+    };
     guard
         .secure(reqwest::Client::builder())
         .user_agent(concat!("Reelix/", env!("CARGO_PKG_VERSION")))
@@ -534,8 +537,10 @@ impl ProviderService {
         if !matches!(row.kind, ProviderKind::Notification | ProviderKind::ImportList) {
             return Ok(());
         }
+        // Notifications and import lists do not use the indexer proxy, so the local DNS decides.
         let guard = AddressGuard {
             allow_private: read(&self.cache).indexer_settings.allow_private_addresses,
+            remote_dns: false,
         };
         if guard.allow_private {
             return Ok(());
@@ -1197,6 +1202,15 @@ impl ProviderService {
     /// Whether loopback/private targets are allowed for indexers, notifications and lists.
     pub fn allow_private_addresses(&self) -> bool {
         read(&self.cache).indexer_settings.allow_private_addresses
+    }
+
+    /// Whether indexer traffic goes through a proxy, which then looks the sites up.
+    pub fn indexer_proxy_set(&self) -> bool {
+        read(&self.cache)
+            .indexer_settings
+            .proxy
+            .as_ref()
+            .is_some_and(|p| !p.host.trim().is_empty())
     }
 
     pub async fn set_indexer_settings(&self, mut s: IndexerSettingsDto) -> Result<IndexerSettingsDto> {

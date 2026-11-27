@@ -95,6 +95,8 @@ impl BuildContext {
     pub fn guard(&self) -> AddressGuard {
         AddressGuard {
             allow_private: self.allow_private_addresses,
+            // The proxy looks the site up, not the local DNS.
+            remote_dns: self.proxy.is_some(),
         }
     }
 

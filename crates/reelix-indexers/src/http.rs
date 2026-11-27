@@ -84,6 +84,11 @@ impl ProxyConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct AddressGuard {
     pub allow_private: bool,
+    /// The requests go through a proxy, which looks host names up itself (`socks5h`, or an HTTP
+    /// proxy's `CONNECT`). The local DNS is then not asked: a site the local resolver blocks may
+    /// still be reachable through the proxy, and the address the local DNS gives is not the one
+    /// used. Only what can be checked without DNS is checked (IP literals, `localhost`).
+    pub remote_dns: bool,
 }
 
 /// True for addresses that must not be reachable from user-supplied URLs by default.
@@ -194,10 +199,11 @@ impl AddressGuard {
         }
     }
 
-    /// Full check including DNS resolution of host names.
+    /// Full check including DNS resolution of host names, unless a proxy resolves them
+    /// ([`Self::remote_dns`]).
     pub async fn check(&self, url: &Url) -> Result<(), IndexerError> {
         self.check_literal(url)?;
-        if self.allow_private {
+        if self.allow_private || self.remote_dns {
             return Ok(());
         }
         if let Some(url::Host::Domain(d)) = url.host() {
@@ -491,7 +497,10 @@ mod tests {
 
     #[tokio::test]
     async fn guard_blocks_private_literals() {
-        let g = AddressGuard { allow_private: false };
+        let g = AddressGuard {
+            allow_private: false,
+            remote_dns: false,
+        };
         for u in [
             "http://127.0.0.1/",
             "http://10.1.2.3/",
@@ -507,10 +516,43 @@ mod tests {
                 .is_ok()
         );
         assert!(
-            AddressGuard { allow_private: true }
-                .check_literal(&Url::parse("http://192.168.1.2/").unwrap())
-                .is_ok()
+            AddressGuard {
+                allow_private: true,
+                remote_dns: false
+            }
+            .check_literal(&Url::parse("http://192.168.1.2/").unwrap())
+            .is_ok()
         );
+    }
+
+    /// behind a proxy the local DNS is not asked, but literals are still checked.
+    #[tokio::test]
+    async fn guard_behind_a_proxy_leaves_names_to_the_proxy() {
+        let local = AddressGuard {
+            allow_private: false,
+            remote_dns: false,
+        };
+        let proxied = AddressGuard {
+            allow_private: false,
+            remote_dns: true,
+        };
+        // `.invalid` never resolves (RFC 6761), like a site the local provider blocks by DNS.
+        let blocked = Url::parse("https://indexer.invalid/api").unwrap();
+        assert!(matches!(
+            local.check(&blocked).await,
+            Err(IndexerError::Blocked(m)) if m.contains("cannot resolve")
+        ));
+        assert!(proxied.check(&blocked).await.is_ok());
+        for u in [
+            "http://127.0.0.1/",
+            "http://10.1.2.3/",
+            "http://[::1]/",
+            "http://localhost:9117/",
+            "http://tracker.localhost/",
+            "ftp://example.com/",
+        ] {
+            assert!(proxied.check(&Url::parse(u).unwrap()).await.is_err(), "{u}");
+        }
     }
 
     #[test]
@@ -593,7 +635,10 @@ mod tests {
             proxy: None,
             timeout: Duration::from_secs(5),
             user_agent: "t".into(),
-            guard: AddressGuard { allow_private },
+            guard: AddressGuard {
+                allow_private,
+                remote_dns: false,
+            },
         };
         let url = format!("http://localhost:{port}/");
         let err = build_client(&opts(false), true)
