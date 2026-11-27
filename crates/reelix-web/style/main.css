@@ -1567,6 +1567,13 @@ textarea {
   from { opacity: 0; transform: translateY(8px) scale(0.98); }
 }
 
+.toast-dismiss-all {
+  align-self: flex-end;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+}
+
 .toast-icon {
   color: var(--tone);
   padding-top: 2px;

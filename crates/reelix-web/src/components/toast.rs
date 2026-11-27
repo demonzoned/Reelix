@@ -10,6 +10,12 @@ pub fn ToastHost() -> impl IntoView {
     let toasts = Toasts::expect();
     view! {
         <div class="toast-region" role="region" aria-label="Notifications">
+            <Show when=move || { toasts.items.with(|t| t.len() > 1) }>
+                <button type="button" class="btn btn-ghost btn-sm toast-dismiss-all"
+                    on:click=move |_| toasts.dismiss_all()>
+                    "Dismiss all"
+                </button>
+            </Show>
             <For each=move || toasts.items.get() key=|t| t.id let:toast>
                 {
                     let (class, icon) = match toast.kind {

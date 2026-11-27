@@ -304,6 +304,15 @@ fn PlexSignIn(values: RwSignal<Map<String, Value>>) -> impl IntoView {
     }
 }
 
+/// Toast topic for `action` ("test", "save") on one provider (`None`: one not saved yet), so a
+/// later success clears the errors it answers.
+fn toast_topic(kind: ProviderKind, id: Option<i64>, action: &str) -> String {
+    match id {
+        Some(id) => format!("{}:{id}:{action}", kind.path()),
+        None => format!("{}:new:{action}", kind.path()),
+    }
+}
+
 /// Create/edit form for one provider instance.
 #[component]
 pub fn ProviderForm(
@@ -330,6 +339,8 @@ pub fn ProviderForm(
     let testing = RwSignal::new(false);
     let saving = RwSignal::new(false);
     let result = RwSignal::new(None::<TestResultDto>);
+    // The last test or save error, shown beside the form's buttons as well as in a toast.
+    let form_error = RwSignal::new(None::<String>);
     let implementation = schema.schema.implementation.clone();
     let has_advanced = schema.schema.fields.iter().any(|f| f.advanced);
     let is_plex = kind == ProviderKind::MediaServer && implementation == "plex";
@@ -355,10 +366,21 @@ pub fn ProviderForm(
             }
             testing.set(true);
             result.set(None);
+            form_error.set(None);
             spawn_local(async move {
+                let topic = toast_topic(kind, id, "test");
                 match api::post::<_, TestResultDto>(&format!("/{}/test", kind.path()), &body).await {
-                    Ok(r) => result.set(Some(r)),
-                    Err(e) => toasts.error(format!("Test failed: {e}")),
+                    Ok(r) => {
+                        if r.ok {
+                            toasts.answered(&topic);
+                        }
+                        result.set(Some(r));
+                    }
+                    Err(e) => {
+                        let message = format!("Test failed: {e}");
+                        form_error.set(Some(message.clone()));
+                        toasts.error_about(topic, message);
+                    }
                 }
                 testing.set(false);
             });
@@ -369,6 +391,7 @@ pub fn ProviderForm(
         e.prevent_default();
         let body = input();
         saving.set(true);
+        form_error.set(None);
         spawn_local(async move {
             let res = match id {
                 Some(id) => api::put::<_, ProviderDto>(&format!("/{}/{id}", kind.path()), &body).await,
@@ -376,10 +399,18 @@ pub fn ProviderForm(
             };
             match res {
                 Ok(saved) => {
-                    toasts.success(format!("Saved “{}”.", saved.name));
+                    toasts.answered(&toast_topic(kind, id, "save"));
+                    toasts.success_about(
+                        toast_topic(kind, Some(saved.id), "save"),
+                        format!("Saved “{}”.", saved.name),
+                    );
                     on_saved.run(saved);
                 }
-                Err(e) => toasts.error(format!("Could not save: {e}")),
+                Err(e) => {
+                    let message = format!("Could not save: {e}");
+                    form_error.set(Some(message.clone()));
+                    toasts.error_about(toast_topic(kind, id, "save"), message);
+                }
             }
             saving.set(false);
         });
@@ -454,6 +485,7 @@ pub fn ProviderForm(
                 </button>
             })}
             {move || result.get().map(|r| view! { <TestResultView result=r /> })}
+            {move || form_error.get().map(|m| view! { <p class="field-error provider-form-error">{m}</p> })}
             <div class="form-actions">
                 <button type="button" class="btn btn-ghost" on:click=move |_| on_cancel.run(())>"Cancel"</button>
                 <button type="button" class="btn btn-secondary" on:click=test disabled=move || testing.get()>
@@ -615,17 +647,21 @@ pub fn ProviderListCard(
     let run_test = move |id: i64| {
         testing.set(Some(id));
         spawn_local(async move {
+            let topic = toast_topic(kind, Some(id), "test");
             match api::post_empty::<TestResultDto>(&format!("/{}/{id}/test", kind.path())).await {
                 Ok(r) => {
                     if r.ok {
-                        toasts.success("Test passed.");
+                        toasts.success_about(topic, "Test passed.");
                     } else {
-                        toasts.error(format!("Test failed: {}", r.message.clone().unwrap_or_default()));
+                        toasts.error_about(
+                            topic,
+                            format!("Test failed: {}", r.message.clone().unwrap_or_default()),
+                        );
                     }
                     last_test.set(Some((id, r)));
                     items.refetch();
                 }
-                Err(e) => toasts.error(format!("Test failed: {e}")),
+                Err(e) => toasts.error_about(topic, format!("Test failed: {e}")),
             }
             testing.set(None);
         });
