@@ -29,6 +29,11 @@ ignore = [
     # crypto-bigint 0.5 is pinned by elliptic-curve 0.13 (openidconnect's p256/p384), which
     # only verifies token signatures with public keys.
     { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 only handles public values in signature verification" },
+    # libsqlite3-sys 0.30 (bundled SQLite before 3.54) is pinned by sqlx 0.8; the fix needs libsqlite3-sys 0.39.
+    # Only a database whose -wal file a less trusted party could write is exposed; Reelix opens only its own.
+    { id = "RUSTSEC-2026-0459", reason = "Reelix opens only its own database files; the fix needs sqlx 0.9" },
+    # chrono is marked unmaintained (RUSTSEC-2026-0543). This is a notice that nobody maintains it, not a known flaw.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained: no known flaw; accepted until it is replaced" },
 ]
 
 [licenses]
