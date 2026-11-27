@@ -58,7 +58,47 @@ pub async fn health(State(state): State<AppState>, MaybeUser(user): MaybeUser) -
     (code, ApiJson(HealthReport { status, checks })).into_response()
 }
 
+/// Liveness for the container health check (`reelix healthcheck`): only Reelix's own parts, the
+/// database and the data directory. Download clients, indexers and other apps stay in
+/// `/system/health`, so Docker does not mark a working Reelix unhealthy, and a restart tool does not
+/// restart it, for another app's fault. HTTP 503 when the database or the data directory fails.
+/// It answers the overall status only, so it needs no sign-in.
+#[utoipa::path(get, path = "/api/v1/system/health/live", tag = "system",
+    responses(
+        (status = 200, description = "Reelix itself is working", body = HealthReport),
+        (status = 503, description = "The database or the data directory failed", body = HealthReport),
+    ))]
+pub async fn live(State(state): State<AppState>) -> Response {
+    let status = own_checks(&state)
+        .await
+        .iter()
+        .map(|c| c.level)
+        .max()
+        .unwrap_or(HealthLevel::Ok);
+    let code = if status == HealthLevel::Error {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
+    let report = HealthReport {
+        status,
+        checks: Vec::new(),
+    };
+    (code, ApiJson(report)).into_response()
+}
+
 async fn run_health_checks(state: &AppState) -> Vec<HealthCheck> {
+    let mut checks = own_checks(state).await;
+    if let Some(sources) = state.try_ext::<HealthSources>() {
+        for s in &sources.0 {
+            checks.extend(s.checks());
+        }
+    }
+    checks
+}
+
+/// Checks of Reelix's own parts: the database and the data directory.
+async fn own_checks(state: &AppState) -> Vec<HealthCheck> {
     let mut checks = Vec::new();
     checks.push(match state.db().ping().await {
         Ok(()) => check("database", HealthLevel::Ok, "Database is reachable".into()),
@@ -95,11 +135,6 @@ async fn run_health_checks(state: &AppState) -> Vec<HealthCheck> {
             format!("Data directory check failed: {e}"),
         ),
     });
-    if let Some(sources) = state.try_ext::<HealthSources>() {
-        for s in &sources.0 {
-            checks.extend(s.checks());
-        }
-    }
     checks
 }
 

@@ -793,7 +793,7 @@ The job runner is a fixed worker pool with **per-kind concurrency limits** (for 
 | Issues | CRUD `/issues`, `POST /issues/{id}/comments` |
 | Users | CRUD `/users`, `POST /users/import/{jellyfin|plex}`, `GET /users/{id}/quota` |
 | Notifications / Media Servers / Import Lists | CRUD + `/schema` + `/test` |
-| System | `GET /system/status`, `GET /system/health`, `GET/POST /system/tasks`, `GET /system/logs`, `POST /system/backup`, `POST /system/restore` |
+| System | `GET /system/status`, `GET /system/health`, `GET /system/health/live`, `GET/POST /system/tasks`, `GET /system/logs`, `POST /system/backup`, `POST /system/restore` |
 | Settings | `GET/PUT /settings/{section}` (general, media-management, naming, ui, requests, security) |
 
 ### Compatibility Shims (M10)
@@ -1334,7 +1334,7 @@ CI gates: fmt, clippy (pedantic where sensible), tests on Linux/macOS/Windows, `
 - Structured logs (`tracing`) to the console and rolling files, plus a UI log viewer with live tail.
 - Optional `/metrics` Prometheus endpoint: job durations, queue depth, indexer latency/failures, HTTP latency and grabs/imports counters.
 - Optional OpenTelemetry trace export.
-- `/api/v1/system/health` for container healthchecks. It returns 200, or 503 when there are critical issues.
+- `/api/v1/system/health/live` for container health checks (`reelix healthcheck`). It checks only the database and the data directory, and returns 200, or 503 when either fails. `/api/v1/system/health` is the full report, download clients and indexers included; it returns 503 when any check is an error, so the container does not use it.
 
 ---
 

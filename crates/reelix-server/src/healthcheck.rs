@@ -18,9 +18,10 @@ pub fn target_addr(bind: IpAddr, port: u16) -> SocketAddr {
     SocketAddr::new(ip, port)
 }
 
-/// Health endpoint path for the given URL base.
+/// Liveness endpoint path for the given URL base. It checks only Reelix's own parts (the database and
+/// the data directory), so a download client or indexer problem does not mark the container unhealthy.
 pub fn health_path(url_base: &str) -> String {
-    format!("{url_base}/api/v1/system/health")
+    format!("{url_base}/api/v1/system/health/live")
 }
 
 /// Sends `GET path` and returns the HTTP status code.
@@ -100,8 +101,8 @@ mod tests {
             target_addr("10.1.2.3".parse().unwrap(), 2),
             "10.1.2.3:2".parse().unwrap()
         );
-        assert_eq!(health_path(""), "/api/v1/system/health");
-        assert_eq!(health_path("/reelix"), "/reelix/api/v1/system/health");
+        assert_eq!(health_path(""), "/api/v1/system/health/live");
+        assert_eq!(health_path("/reelix"), "/reelix/api/v1/system/health/live");
     }
 
     fn serve_once(response: &'static str) -> (SocketAddr, std::thread::JoinHandle<String>) {

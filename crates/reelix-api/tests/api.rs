@@ -982,6 +982,46 @@ async fn health_reports_unwritable_data_dir_as_503() {
     assert_eq!(r.body["status"], "error");
 }
 
+/// A download client or indexer problem fails the health report but not the liveness answer the
+/// container health check uses; a fault in Reelix itself fails both.
+#[tokio::test]
+async fn liveness_ignores_other_apps_but_not_reelix_itself() {
+    struct BrokenClient;
+    impl reelix_api::HealthSource for BrokenClient {
+        fn checks(&self) -> Vec<reelix_api_types::HealthCheck> {
+            vec![reelix_api_types::HealthCheck {
+                source: "download_clients".into(),
+                level: reelix_api_types::HealthLevel::Error,
+                message: "NZBGet cannot be reached".into(),
+            }]
+        }
+    }
+    let mut app = app().await;
+    let sources = reelix_api::HealthSources(vec![std::sync::Arc::new(BrokenClient)]);
+    reconfigure(&mut app, |s| s.with_extension(std::sync::Arc::new(sources)));
+
+    let full = call(&app, Method::GET, "/api/v1/system/health", Req::default()).await;
+    assert_eq!(full.status, StatusCode::SERVICE_UNAVAILABLE);
+    let live = call(&app, Method::GET, "/api/v1/system/health/live", Req::default()).await;
+    assert_eq!(live.status, StatusCode::OK, "{:?}", live.body);
+    assert_eq!(live.body["status"], "ok");
+    assert_eq!(live.body["checks"].as_array().unwrap().len(), 0);
+
+    // An unwritable data directory is Reelix's own fault, so liveness fails too.
+    let db = app.state.db().clone();
+    let events = app.state.events().clone();
+    let queue = app.state.jobs().clone();
+    let cfg = ApiConfig {
+        data_dir: app._dir.path().join("does-not-exist"),
+        ..app.state.config().clone()
+    };
+    app.state = AppState::new(db, events, queue, app.state.secrets().clone(), cfg);
+    app.router = reelix_api::router(app.state.clone());
+    let live = call(&app, Method::GET, "/api/v1/system/health/live", Req::default()).await;
+    assert_eq!(live.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(live.body["status"], "error");
+}
+
 #[tokio::test]
 async fn openapi_and_docs_are_served() {
     let app = app().await;
@@ -1000,6 +1040,7 @@ async fn openapi_and_docs_are_served() {
         "/api/v1/auth/apikeys/{id}",
         "/api/v1/system/status",
         "/api/v1/system/health",
+        "/api/v1/system/health/live",
         "/api/v1/system/tasks",
         "/api/v1/system/tasks/{kind}/run",
         "/api/v1/system/jobs",
