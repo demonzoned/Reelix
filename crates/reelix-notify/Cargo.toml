@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1-rustls-tls"] }
+lettre = { version = "0.11.24", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1-rustls-tls"] }
 reelix-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
