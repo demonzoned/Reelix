@@ -73,10 +73,18 @@ pub fn TestResultView(result: TestResultDto) -> impl IntoView {
     }
 }
 
-/// One schema field bound to `values`.
+/// Element id of the schema field at `index`. It comes from the field's position, not its name:
+/// browsers and password managers take an input whose id holds "username", "user" or "login" for
+/// the site's own sign-in and fill it with the Reelix account, even with `autocomplete="off"`.
+fn field_dom_id(index: usize) -> String {
+    format!("pf-field-{index}")
+}
+
+/// One schema field bound to `values`. These fields hold another app's sign-in, so every text
+/// input has `autocomplete="off"` (secrets `new-password`) and the password managers' ignore hints.
 #[component]
-fn SchemaField(field: FieldSchema, values: RwSignal<Map<String, Value>>) -> impl IntoView {
-    let id = format!("pf-{}", field.name);
+fn SchemaField(field: FieldSchema, index: usize, values: RwSignal<Map<String, Value>>) -> impl IntoView {
+    let id = field_dom_id(index);
     let name = field.name.clone();
     let label = format!("{}{}", field.label, if field.required { " *" } else { "" });
     let help = field.help.clone();
@@ -111,6 +119,7 @@ fn SchemaField(field: FieldSchema, values: RwSignal<Map<String, Value>>) -> impl
         }
         FieldKind::Number => view! {
             <input id=id.clone() class="input" type="number" step="any" placeholder=placeholder.clone()
+                autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"
                 prop:value={ let get = get.clone(); move || as_text(get().as_ref()) }
                 on:input=move |e| {
                     let s = event_target_value(&e);
@@ -130,6 +139,7 @@ fn SchemaField(field: FieldSchema, values: RwSignal<Map<String, Value>>) -> impl
         .into_any(),
         FieldKind::Secret => view! {
             <input id=id.clone() class="input" type="password" autocomplete="new-password"
+                data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"
                 placeholder=if placeholder.is_empty() { "Not set".to_owned() } else { placeholder.clone() }
                 prop:value={ let get = get.clone(); move || as_text(get().as_ref()) }
                 on:input=move |e| set(Value::String(event_target_value(&e))) />
@@ -194,6 +204,7 @@ fn SchemaField(field: FieldSchema, values: RwSignal<Map<String, Value>>) -> impl
                 .is_some_and(Value::is_number);
             view! {
                 <textarea id=id.clone() class="input" rows="3" placeholder="One entry per line"
+                    autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"
                     prop:value={ let get = get.clone(); move || match get() {
                         Some(Value::Array(a)) => a.iter().map(|v| as_text(Some(v))).collect::<Vec<_>>().join("\n"),
                         other => as_text(other.as_ref()),
@@ -217,6 +228,7 @@ fn SchemaField(field: FieldSchema, values: RwSignal<Map<String, Value>>) -> impl
             let ty = if matches!(field.kind, FieldKind::Url) { "url" } else { "text" };
             view! {
                 <input id=id.clone() class="input" type=ty placeholder=placeholder.clone()
+                    autocapitalize="off" spellcheck="false" autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"
                     prop:value={ let get = get.clone(); move || as_text(get().as_ref()) }
                     on:input=move |e| set(Value::String(event_target_value(&e))) />
             }
@@ -390,14 +402,14 @@ pub fn ProviderForm(
         let show_adv = advanced.get();
         fields
             .iter()
-            .filter(|f| show_adv || !f.advanced)
-            .cloned()
-            .map(|f| view! { <SchemaField field=f values=values /> })
+            .enumerate()
+            .filter(|(_, f)| show_adv || !f.advanced)
+            .map(|(index, f)| view! { <SchemaField field=f.clone() index=index values=values /> })
             .collect_view()
     };
 
     view! {
-        <form class="form provider-form" on:submit=save>
+        <form class="form provider-form" autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" on:submit=save>
             {schema.schema.description.clone().map(|d| view! { <p class="field-hint">{d}</p> })}
             {schema.schema.info_url.as_deref().and_then(crate::format::http_url).map(|u| view! {
                 <p class="field-hint"><a href=u target="_blank" rel="noopener noreferrer">"More info ↗"</a></p>
@@ -406,11 +418,13 @@ pub fn ProviderForm(
                 <div class="field">
                     <label for="pf-name">"Name *"</label>
                     <input id="pf-name" class="input" type="text" required maxlength="100"
+                        autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"
                         prop:value=move || name.get() on:input=move |e| name.set(event_target_value(&e)) />
                 </div>
                 <div class="field">
                     <label for="pf-priority">"Priority"</label>
                     <input id="pf-priority" class="input" type="number" min="0" max="100"
+                        autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"
                         prop:value=move || priority.get() on:input=move |e| priority.set(event_target_value(&e)) />
                     <p class="field-hint">"Lower is preferred."</p>
                 </div>
@@ -793,5 +807,66 @@ fn DefinitionsEmptyHint() -> impl IntoView {
             </button>
             <leptos_router::components::A href="/settings/indexers" attr:class="btn btn-ghost btn-sm">"Definition settings"</leptos_router::components::A>
         </EmptyState>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Words that make browsers and password managers treat an input as the site's sign-in.
+    const SIGN_IN_WORDS: [&str; 5] = ["user", "login", "email", "pass", "account"];
+
+    #[test]
+    fn field_ids_do_not_name_a_sign_in() {
+        for index in 0..50 {
+            let id = field_dom_id(index);
+            assert!(id.starts_with("pf-field-"), "{id}");
+            for word in SIGN_IN_WORDS {
+                assert!(!id.contains(word), "{id} holds {word}");
+            }
+        }
+        assert_ne!(field_dom_id(0), field_dom_id(1));
+    }
+
+    /// Every text input in the form opts out of autofill, so a download client's username and
+    /// password are never filled with the Reelix sign-in.
+    #[test]
+    fn every_text_input_opts_out_of_autofill() {
+        let source = include_str!("provider_form.rs");
+        let source = &source[..source.find("#[cfg(test)]").unwrap()];
+        let schema_field = &source[source.find("fn SchemaField(").unwrap()..];
+        let form = &source[source.find("pub fn ProviderForm(").unwrap()..];
+        let form = &form[..form.find("\n}\n").unwrap()];
+        let schema_field = &schema_field[..schema_field.find("\n}\n").unwrap()];
+        let mut checked = 0;
+        for part in [schema_field, form] {
+            for tag in ["<input ", "<textarea ", "<form "] {
+                for (at, _) in part.match_indices(tag) {
+                    // The attributes come before the first property or event binding.
+                    let rest = &part[at..];
+                    let end = ["prop:", "on:", "/>"]
+                        .iter()
+                        .filter_map(|m| rest.find(m))
+                        .min()
+                        .unwrap();
+                    let attrs = &rest[..end];
+                    if attrs.contains("type=\"checkbox\"") {
+                        continue;
+                    }
+                    assert!(attrs.contains("autocomplete="), "no autocomplete: {attrs}");
+                    for hint in ["data-1p-ignore", "data-lpignore", "data-bwignore"] {
+                        assert!(attrs.contains(hint), "no {hint}: {attrs}");
+                    }
+                    assert!(
+                        !attrs.contains(" name="),
+                        "a name attribute invites autofill: {attrs}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        // Number, secret, list and text fields; the form, its name and its priority.
+        assert_eq!(checked, 7);
     }
 }
